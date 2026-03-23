@@ -23,3 +23,5 @@
 ### 2026-03-23
 - 新增：專案初始建立，完整錄音功能上線
 - 修改：主程式改為 tkinter GUI 視窗介面（參考 SnapTranscript 架構）
+- 新增：自訂檔案名稱欄位，錄音前可先填好名稱
+- 修正：launcher.ps1 加入 ARM64 架構偵測，強制安裝 x64 Python 確保 pyaudiowpatch 相容性

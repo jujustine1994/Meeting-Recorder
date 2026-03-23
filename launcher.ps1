@@ -9,19 +9,35 @@ Clear-Host
 Write-Host "[INFO] Starting Meeting Recorder..." -ForegroundColor Green
 Write-Host ""
 
+# 偵測 ARM64 架構（後續各區塊共用）
+$isArm64 = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq 'Arm64'
+if ($isArm64) {
+    Write-Host "[INFO] 偵測到 ARM64 架構電腦。" -ForegroundColor Cyan
+}
+
 # ======================================
 # [1/3] 檢查 Python
 # ======================================
 Write-Host "[1/3] 檢查 Python 環境..." -ForegroundColor Cyan
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
     Write-Host "[WARNING] 未偵測到 Python，本程式需要 Python 才能執行。" -ForegroundColor Yellow
+
+    if ($isArm64) {
+        Write-Host ""
+        Write-Host "  [!] 您的電腦是 ARM64 架構。" -ForegroundColor Yellow
+        Write-Host "      本程式的錄音套件（pyaudiowpatch）需要 x64 版本的 Python。" -ForegroundColor Yellow
+        Write-Host "      安裝時請確認選擇的是 Windows x64 版本，而非 ARM64 版本。" -ForegroundColor Yellow
+        Write-Host ""
+    }
+
     $ans = Read-Host "是否要立即安裝 Python？[Y/n] - 直接按 Enter 代表同意"
     if ($ans -eq "" -or $ans -ieq "Y") {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "[INFO] 透過 winget 安裝 Python，請稍候..." -ForegroundColor Gray
-            winget install --id Python.Python.3 -e --silent --accept-source-agreements --accept-package-agreements
+            Write-Host "[INFO] 透過 winget 安裝 Python（x64），請稍候..." -ForegroundColor Gray
+            # 指定 x64 架構，確保 ARM64 電腦也安裝 x64 版（pyaudiowpatch 相容性需求）
+            winget install --id Python.Python.3 -e --silent --accept-source-agreements --accept-package-agreements --architecture x64
         } else {
-            Write-Host "[ERROR] 找不到 winget，請手動至 https://www.python.org/ 下載安裝後重新執行。" -ForegroundColor Red
+            Write-Host "[ERROR] 找不到 winget，請手動至 https://www.python.org/ 下載 Windows x64 版安裝後重新執行。" -ForegroundColor Red
             Read-Host "按 Enter 關閉"; exit 1
         }
         $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
@@ -36,6 +52,19 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
 } else {
     $pyVer = python --version 2>&1
     Write-Host "[OK] $pyVer 已安裝。" -ForegroundColor Green
+
+    # ARM64 電腦但已安裝 ARM64 Python：提醒可能造成套件安裝失敗
+    if ($isArm64) {
+        $pyArch = python -c "import platform; print(platform.machine())" 2>&1
+        if ($pyArch -notmatch "AMD64") {
+            Write-Host ""
+            Write-Host "  [!] 偵測到您安裝的是 ARM64 版 Python（$pyArch）。" -ForegroundColor Yellow
+            Write-Host "      若後續套件安裝失敗，請改裝 x64 版 Python：" -ForegroundColor Yellow
+            Write-Host "      到「設定 -> 應用程式」移除目前的 Python，" -ForegroundColor Yellow
+            Write-Host "      再重新點兩下啟動檔，會自動安裝正確版本。" -ForegroundColor Yellow
+            Write-Host ""
+        }
+    }
 }
 
 # ======================================
