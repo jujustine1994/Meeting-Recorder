@@ -368,7 +368,12 @@ class MeetingRecorderApp:
             """
             p = pyaudio.PyAudio()
             try:
-                stream = p.open(format=pyaudio.paInt16, channels=1, rate=44100,
+                # 使用裝置原生取樣率，避免部分麥克風不支援 44100 Hz 而報錯
+                dev_info = (p.get_device_info_by_index(device_idx)
+                            if device_idx is not None
+                            else p.get_default_input_device_info())
+                sample_rate = int(dev_info["defaultSampleRate"])
+                stream = p.open(format=pyaudio.paInt16, channels=1, rate=sample_rate,
                                 frames_per_buffer=512, input=True,
                                 input_device_index=device_idx)
                 while mic_running[0]:
