@@ -307,6 +307,9 @@ class MeetingRecorderApp:
         self.start_time    = time.time()
         mode = self.record_mode.get()
 
+        # 共用一個 PyAudio 實例，避免兩個執行緒各自 Pa_Initialize() 造成 C 層 assert crash
+        self._pa = pyaudio.PyAudio()
+
         self.btn_record.config(text="⏹  停止並儲存")
         self.status_label.config(text="錄音中...", foreground="red")
         self.timer_label.config(foreground="red")
@@ -316,7 +319,8 @@ class MeetingRecorderApp:
         self._update_timer()
 
         if mode in ("system", "both"):
-            self._record_thread = threading.Thread(target=self._record_worker, daemon=True)
+            self._record_thread = threading.Thread(
+                target=self._record_worker, args=(self._pa,), daemon=True)
             self._record_thread.start()
 
         if mode in ("mic", "both"):
@@ -324,7 +328,7 @@ class MeetingRecorderApp:
             # Mode "both" 的靜音偵測由 loopback worker 負責
             self._mic_thread = threading.Thread(
                 target=self._record_mic_worker,
-                args=(mode == "mic",),
+                args=(self._pa, mode == "mic"),
                 daemon=True,
             )
             self._mic_thread.start()
@@ -353,14 +357,14 @@ class MeetingRecorderApp:
         t.start()
 
     # ---- 錄音執行緒：Loopback ----
-    def _record_worker(self):
+    def _record_worker(self, p: pyaudio.PyAudio):
         """
         錄製系統音訊（WASAPI Loopback）並做靜音偵測。
 
-        open_stream 設計為 closure 以便在裝置切換後重新開啟，
-        同時複用外層的 PyAudio 實例 p，避免重複初始化的開銷。
+        p：由 _start_recording 建立的共用 PyAudio 實例，
+           不在此處 terminate（由 _save_after_stop 統一管理）。
+        open_stream 設計為 closure 以便在裝置切換後重新開啟。
         """
-        p = pyaudio.PyAudio()
         try:
             chunk = 512
 
@@ -434,14 +438,13 @@ class MeetingRecorderApp:
 
         except Exception as e:
             self.msg_queue.put(("error", str(e)))
-        finally:
-            p.terminate()
 
     # ---- 錄音執行緒：麥克風 ----
-    def _record_mic_worker(self, check_silence: bool = False):
+    def _record_mic_worker(self, p: pyaudio.PyAudio, check_silence: bool = False):
         """
         錄製麥克風音訊。
 
+        p：由 _start_recording 建立的共用 PyAudio 實例，不在此處 terminate。
         check_silence=True：Mode mic 時由本 worker 負責靜音偵測。
         Mode both 時為 False，靜音偵測交由 loopback worker 處理。
 
@@ -449,7 +452,6 @@ class MeetingRecorderApp:
         方便後續混音。若麥克風不支援，fallback 到麥克風原生 rate 並記錄，
         混音時會顯示警告（兩個 rate 不一致會造成輕微音速偏差）。
         """
-        p = pyaudio.PyAudio()
         try:
             chunk = 512
             target_rate = self.record_sample_rate  # 對齊 loopback rate
@@ -519,8 +521,6 @@ class MeetingRecorderApp:
             # Mode "mic"：視為致命錯誤
             level = "warning" if self._save_mode == "both" else "error"
             self.msg_queue.put((level, f"麥克風錯誤：{e}"))
-        finally:
-            p.terminate()
 
     # ---- 混音 ----
     def _mix_pcm(self, sys_data: bytes, sys_ch: int,
@@ -572,6 +572,12 @@ class MeetingRecorderApp:
             self._record_thread.join(timeout=3)
         if self._mic_thread:
             self._mic_thread.join(timeout=3)
+
+        # 所有 stream 已關閉，統一釋放共用 PyAudio 實例
+        try:
+            self._pa.terminate()
+        except Exception:
+            pass
 
         try:
             mode = self._save_mode  # 已在主執行緒鎖定，不從 tkinter StringVar 讀取
