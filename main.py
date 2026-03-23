@@ -5,6 +5,8 @@ Meeting Recorder
 
 import os
 import sys
+import math
+import struct
 import threading
 import datetime
 import time
@@ -133,9 +135,19 @@ class MeetingRecorderApp:
         )
         self.status_label.pack(pady=(4, 0))
 
+        # 靜音警告橫幅（預設隱藏，偵測到靜音才顯示）
+        self.silence_banner = tk.Frame(self.root, background="#FFA500", padx=12, pady=8)
+        tk.Label(
+            self.silence_banner,
+            text="⚠  偵測到超過 10 秒沒有聲音，請確認：\n"
+                 "系統是否靜音？播放裝置是否正確？",
+            background="#FFA500", foreground="white",
+            font=("", 10, "bold"), justify="left"
+        ).pack(anchor="w")
+
         # 錄音記錄
         frame_log = ttk.LabelFrame(self.root, text=" 錄音記錄 ", padding=8)
-        frame_log.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 14))
+        frame_log.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 14))
 
         self.log_text = scrolledtext.ScrolledText(
             frame_log, width=52, height=6,
@@ -221,10 +233,34 @@ class MeetingRecorderApp:
 
             stream, self.record_channels, self.record_sample_rate = open_stream()
 
+            SILENCE_RMS_THRESHOLD = 100   # Int16 最大值 32767，低於此視為靜音
+            SILENCE_WARNING_SECS  = 10
+            silence_start  = None
+            silence_warned = False
+
             while self.is_recording:
                 try:
                     data = stream.read(chunk, exception_on_overflow=False)
                     self.record_frames.append(data)
+
+                    # ---- 靜音偵測（計算 RMS）----
+                    num_samples = len(data) // 2
+                    if num_samples > 0:
+                        samples = struct.unpack(f"{num_samples}h", data)
+                        rms = math.sqrt(sum(s * s for s in samples) / num_samples)
+
+                        if rms < SILENCE_RMS_THRESHOLD:
+                            if silence_start is None:
+                                silence_start = time.time()
+                            elif not silence_warned and (time.time() - silence_start) >= SILENCE_WARNING_SECS:
+                                self.msg_queue.put(("silence_warning", True))
+                                silence_warned = True
+                        else:
+                            silence_start = None
+                            if silence_warned:
+                                self.msg_queue.put(("silence_warning", False))
+                                silence_warned = False
+
                 except OSError:
                     # 裝置失效（插拔耳機 / 切換播放裝置），重新取得新裝置
                     # 沿用原格式（channels/sample_rate）確保 PCM 資料前後一致
@@ -318,12 +354,19 @@ class MeetingRecorderApp:
                         text=f"已儲存：{filename}", foreground="green"
                     )
                     self.timer_label.config(text="00:00", foreground="gray")
+                    self.silence_banner.grid_remove()
                 elif msg_type == "error":
                     self._log(f"[ERROR] {data}")
                     self.btn_record.config(state="normal", text="⏺  開始錄音")
                     self.status_label.config(text="發生錯誤，請查看記錄", foreground="red")
                     self.timer_label.config(text="00:00", foreground="gray")
+                    self.silence_banner.grid_remove()
                     self.is_recording = False
+                elif msg_type == "silence_warning":
+                    if data:  # True = 顯示警告
+                        self.silence_banner.grid(row=3, column=0, sticky="ew", padx=14, pady=(0, 6))
+                    else:     # False = 聲音恢復，隱藏警告
+                        self.silence_banner.grid_remove()
         except queue.Empty:
             pass
         self.root.after(100, self._poll_queue)
