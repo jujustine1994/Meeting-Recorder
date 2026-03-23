@@ -1,6 +1,11 @@
 """
 Meeting Recorder
 錄製電腦系統音訊（WASAPI Loopback）、麥克風或兩者混音，儲存為 MP3
+
+模式說明：
+  system  — WASAPI Loopback，捕捉系統所有輸出音訊
+  mic     — 系統預設麥克風
+  both    — 兩者同時錄製，存檔前混音成單一 MP3
 """
 
 import os
@@ -41,7 +46,13 @@ def show_cth_banner():
 
 # ---- 音訊裝置 ----
 def get_loopback_device(p: pyaudio.PyAudio) -> dict:
-    """取得系統預設輸出的 WASAPI Loopback 裝置"""
+    """
+    取得系統預設輸出的 WASAPI Loopback 裝置。
+
+    pyaudiowpatch 為每個輸出裝置產生一個對應的虛擬 loopback 輸入裝置，
+    名稱包含原裝置名稱。若 defaultOutputDevice 本身不是 loopback，
+    就用名稱比對找到對應的 loopback 裝置。
+    """
     try:
         wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     except OSError:
@@ -57,6 +68,19 @@ def get_loopback_device(p: pyaudio.PyAudio) -> dict:
     return default_speakers
 
 
+# ---- 靜音偵測輔助 ----
+def _compute_rms(data: bytes) -> float:
+    """
+    計算 PCM Int16 音訊資料的 RMS（均方根）音量。
+    回傳範圍 0.0 ~ 32767.0，靜音接近 0。
+    """
+    num_samples = len(data) // 2
+    if num_samples == 0:
+        return 0.0
+    samples = struct.unpack(f"{num_samples}h", data)
+    return math.sqrt(sum(s * s for s in samples) / num_samples)
+
+
 # ---- 主視窗 ----
 class MeetingRecorderApp:
     def __init__(self, root: tk.Tk):
@@ -66,16 +90,17 @@ class MeetingRecorderApp:
 
         # 錄音狀態
         self.is_recording = False
-        self.record_frames: list[bytes] = []
-        self.mic_frames:    list[bytes] = []
-        self.record_channels    = 2
-        self.record_sample_rate = 44100
-        self.record_mic_channels    = 1
-        self.record_mic_rate        = 44100
+        self.record_frames: list[bytes] = []   # loopback 音訊暫存
+        self.mic_frames:    list[bytes] = []   # 麥克風音訊暫存
+        self.record_channels    = 2            # loopback 聲道數（由裝置決定，最多 2）
+        self.record_sample_rate = 44100        # loopback 取樣率（由裝置決定）
+        self.record_mic_channels    = 1        # 麥克風固定 mono
+        self.record_mic_rate        = 44100    # 麥克風實際使用的取樣率
         self.start_time: float = 0.0
         self.msg_queue: queue.Queue = queue.Queue()
         self._record_thread: threading.Thread | None = None
         self._mic_thread:    threading.Thread | None = None
+        self._save_mode: str = "system"        # 儲存時使用的模式，在停止時鎖定避免 race condition
 
         # 儲存設定
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -83,7 +108,7 @@ class MeetingRecorderApp:
         self.save_folder_var = tk.StringVar(value=desktop)
         self.filename_var    = tk.StringVar()
 
-        # 錄音模式
+        # 錄音模式（UI 用，tk.StringVar 只在主執行緒存取）
         self.record_mode = tk.StringVar(value="system")
 
         self._build_ui()
@@ -162,7 +187,7 @@ class MeetingRecorderApp:
         )
         self.status_label.pack(pady=(4, 0))
 
-        # row=4  靜音警告橫幅（預設隱藏）
+        # row=4  靜音警告橫幅（預設隱藏，偵測到連續靜音才顯示）
         self.silence_banner = tk.Frame(self.root, background="#FFA500", padx=12, pady=8)
         tk.Label(
             self.silence_banner,
@@ -207,14 +232,14 @@ class MeetingRecorderApp:
             rb.config(state=state)
 
     def _start_recording(self):
-        self.is_recording    = True
-        self.record_frames   = []
-        self.mic_frames      = []
-        self.start_time      = time.time()
+        self.is_recording  = True
+        self.record_frames = []
+        self.mic_frames    = []
+        self.start_time    = time.time()
         mode = self.record_mode.get()
 
-        # Mode "both"：預先偵測 loopback 裝置的 sample_rate，
-        # 讓麥克風 worker 能對齊格式，避免 race condition
+        # Mode "both"：預先偵測 loopback 裝置規格，
+        # 讓麥克風 worker 啟動時就能對齊 sample_rate，避免兩個 worker 的 race condition
         if mode == "both":
             try:
                 p = pyaudio.PyAudio()
@@ -223,7 +248,7 @@ class MeetingRecorderApp:
                 self.record_sample_rate = int(device["defaultSampleRate"])
                 p.terminate()
             except Exception:
-                pass  # 保留預設值 44100 Hz
+                pass  # 保留預設值 44100 Hz，_record_worker 啟動後會更新
 
         self.btn_record.config(text="⏹  停止並儲存")
         self.status_label.config(text="錄音中...", foreground="red")
@@ -238,7 +263,8 @@ class MeetingRecorderApp:
             self._record_thread.start()
 
         if mode in ("mic", "both"):
-            # Mode "mic" 才做靜音偵測；Mode "both" 靜音偵測由 loopback worker 負責
+            # check_silence：Mode "mic" 才由麥克風 worker 負責靜音偵測；
+            # Mode "both" 的靜音偵測由 loopback worker 負責
             self._mic_thread = threading.Thread(
                 target=self._record_mic_worker,
                 args=(mode == "mic",),
@@ -247,7 +273,7 @@ class MeetingRecorderApp:
             self._mic_thread.start()
 
     def _update_timer(self):
-        """每秒更新計時器（主執行緒安全）"""
+        """每秒更新計時器（root.after 確保在主執行緒執行）"""
         if self.is_recording:
             elapsed = int(time.time() - self.start_time)
             mins = elapsed // 60
@@ -257,6 +283,10 @@ class MeetingRecorderApp:
 
     def _stop_recording(self):
         self.is_recording = False
+
+        # 在主執行緒鎖定模式，避免背景 _save_after_stop 從 tkinter StringVar 讀取
+        self._save_mode = self.record_mode.get()
+
         self.btn_record.config(state="disabled", text="儲存中...")
         self.status_label.config(text="轉換為 MP3 中...", foreground="gray")
         self.timer_label.config(foreground="gray")
@@ -267,12 +297,18 @@ class MeetingRecorderApp:
 
     # ---- 錄音執行緒：Loopback ----
     def _record_worker(self):
-        """錄製系統音訊（WASAPI Loopback）；同時做靜音偵測"""
+        """
+        錄製系統音訊（WASAPI Loopback）並做靜音偵測。
+
+        open_stream 設計為 closure 以便在裝置切換後重新開啟，
+        同時複用外層的 PyAudio 實例 p，避免重複初始化的開銷。
+        """
         p = pyaudio.PyAudio()
         try:
             chunk = 512
 
             def open_stream(channels=None, sample_rate=None):
+                """取得當前預設輸出的 loopback stream，沿用指定格式確保 PCM 連續性"""
                 device = get_loopback_device(p)
                 ch = channels or min(device["maxInputChannels"] or 2, 2)
                 sr = sample_rate or int(device["defaultSampleRate"])
@@ -288,6 +324,8 @@ class MeetingRecorderApp:
 
             stream, self.record_channels, self.record_sample_rate = open_stream()
 
+            # 靜音閾值：Int16 RMS < 100（範圍 0~32767）
+            # 對應約 0.3% 最大音量，足以區分真實靜音與極低背景雜訊
             SILENCE_RMS_THRESHOLD = 100
             SILENCE_WARNING_SECS  = 10
             silence_start  = None
@@ -299,31 +337,27 @@ class MeetingRecorderApp:
                     self.record_frames.append(data)
 
                     # ---- 靜音偵測 ----
-                    num_samples = len(data) // 2
-                    if num_samples > 0:
-                        samples = struct.unpack(f"{num_samples}h", data)
-                        rms = math.sqrt(sum(s * s for s in samples) / num_samples)
-
-                        if rms < SILENCE_RMS_THRESHOLD:
-                            if silence_start is None:
-                                silence_start = time.time()
-                            elif not silence_warned and (time.time() - silence_start) >= SILENCE_WARNING_SECS:
-                                self.msg_queue.put(("silence_warning", True))
-                                silence_warned = True
-                        else:
-                            silence_start = None
-                            if silence_warned:
-                                self.msg_queue.put(("silence_warning", False))
-                                silence_warned = False
+                    rms = _compute_rms(data)
+                    if rms < SILENCE_RMS_THRESHOLD:
+                        if silence_start is None:
+                            silence_start = time.time()
+                        elif not silence_warned and (time.time() - silence_start) >= SILENCE_WARNING_SECS:
+                            self.msg_queue.put(("silence_warning", True))
+                            silence_warned = True
+                    else:
+                        silence_start = None
+                        if silence_warned:
+                            self.msg_queue.put(("silence_warning", False))
+                            silence_warned = False
 
                 except OSError:
-                    # 插拔耳機 / 切換播放裝置，重新取得新裝置
+                    # 插拔耳機 / 切換播放裝置導致 stream 失效，重新取得新裝置
                     try:
                         stream.stop_stream()
                         stream.close()
                     except Exception:
                         pass
-                    time.sleep(0.5)
+                    time.sleep(0.5)  # 等 Windows 完成裝置切換
                     if not self.is_recording:
                         break
                     try:
@@ -332,6 +366,7 @@ class MeetingRecorderApp:
                             sample_rate=self.record_sample_rate,
                         )
                     except Exception:
+                        time.sleep(1)  # 裝置仍不可用，避免 busy-wait 佔滿 CPU
                         continue
 
             try:
@@ -347,12 +382,20 @@ class MeetingRecorderApp:
 
     # ---- 錄音執行緒：麥克風 ----
     def _record_mic_worker(self, check_silence: bool = False):
-        """錄製麥克風音訊；check_silence=True 時做靜音偵測（Mode mic）"""
+        """
+        錄製麥克風音訊。
+
+        check_silence=True：Mode mic 時由本 worker 負責靜音偵測。
+        Mode both 時為 False，靜音偵測交由 loopback worker 處理。
+
+        取樣率盡量對齊 self.record_sample_rate（loopback 的 rate），
+        方便後續混音。若麥克風不支援，fallback 到麥克風原生 rate 並記錄，
+        混音時會顯示警告（兩個 rate 不一致會造成輕微音速偏差）。
+        """
         p = pyaudio.PyAudio()
         try:
             chunk = 512
-            # 對齊 loopback 的 sample_rate，方便混音；若為 Mode mic 則用預設 44100
-            target_rate = self.record_sample_rate
+            target_rate = self.record_sample_rate  # 對齊 loopback rate
 
             try:
                 stream = p.open(
@@ -366,9 +409,9 @@ class MeetingRecorderApp:
                 self.record_mic_channels = 1
                 self.record_mic_rate     = target_rate
             except Exception:
-                # 目標 rate 不支援，用麥克風原生 rate
-                dev_info    = p.get_default_input_device_info()
-                fallback    = int(dev_info["defaultSampleRate"])
+                # 麥克風不支援目標 rate，退回麥克風原生 rate
+                dev_info = p.get_default_input_device_info()
+                fallback = int(dev_info["defaultSampleRate"])
                 stream = p.open(
                     format=pyaudio.paInt16,
                     channels=1,
@@ -380,6 +423,7 @@ class MeetingRecorderApp:
                 self.record_mic_channels = 1
                 self.record_mic_rate     = fallback
 
+            # 靜音閾值說明同 _record_worker
             SILENCE_RMS_THRESHOLD = 100
             SILENCE_WARNING_SECS  = 10
             silence_start  = None
@@ -391,25 +435,21 @@ class MeetingRecorderApp:
                     self.mic_frames.append(data)
 
                     if check_silence:
-                        num_samples = len(data) // 2
-                        if num_samples > 0:
-                            samples = struct.unpack(f"{num_samples}h", data)
-                            rms = math.sqrt(sum(s * s for s in samples) / num_samples)
-
-                            if rms < SILENCE_RMS_THRESHOLD:
-                                if silence_start is None:
-                                    silence_start = time.time()
-                                elif not silence_warned and (time.time() - silence_start) >= SILENCE_WARNING_SECS:
-                                    self.msg_queue.put(("silence_warning", True))
-                                    silence_warned = True
-                            else:
-                                silence_start = None
-                                if silence_warned:
-                                    self.msg_queue.put(("silence_warning", False))
-                                    silence_warned = False
+                        rms = _compute_rms(data)
+                        if rms < SILENCE_RMS_THRESHOLD:
+                            if silence_start is None:
+                                silence_start = time.time()
+                            elif not silence_warned and (time.time() - silence_start) >= SILENCE_WARNING_SECS:
+                                self.msg_queue.put(("silence_warning", True))
+                                silence_warned = True
+                        else:
+                            silence_start = None
+                            if silence_warned:
+                                self.msg_queue.put(("silence_warning", False))
+                                silence_warned = False
 
                 except OSError:
-                    break  # 麥克風失效，停止
+                    break  # 麥克風失效，結束錄音
 
             try:
                 stream.stop_stream()
@@ -418,22 +458,37 @@ class MeetingRecorderApp:
                 pass
 
         except Exception as e:
-            if self.record_mode.get() == "mic":
-                self.msg_queue.put(("error", f"麥克風錯誤：{e}"))
+            # Mode "both"：麥克風失敗不中止程式，但通知使用者
+            # Mode "mic"：視為致命錯誤
+            level = "warning" if self._save_mode == "both" else "error"
+            self.msg_queue.put((level, f"麥克風錯誤：{e}"))
         finally:
             p.terminate()
 
     # ---- 混音 ----
     def _mix_pcm(self, sys_data: bytes, sys_ch: int,
                  mic_data: bytes, mic_ch: int) -> bytes:
-        """混合 Loopback 和麥克風的 PCM Int16，輸出與 sys_ch 相同聲道數"""
+        """
+        混合 Loopback（通常 stereo）和麥克風（mono）的 PCM Int16。
+        輸出聲道數與 sys_ch 相同。
+
+        混音權重各 0.6：
+          - 0.5 理論上不會爆音，但混出來音量偏小
+          - 0.6 讓整體音量更接近原始，偶爾超出 Int16 範圍時由 clamp 截斷
+          - > 0.7 爆音風險明顯增加
+
+        已知限制：
+          若 sys 和 mic 的 sample_rate 不同（見 record_sample_rate vs record_mic_rate），
+          兩個 array 長度比例會不一致，truncate 後 mic 音訊速度會輕微偏差。
+          正確做法是 resample（需 numpy 或 soxr），目前接受此限制。
+        """
         sys_arr = array.array('h')
         sys_arr.frombytes(sys_data)
 
         mic_arr = array.array('h')
         mic_arr.frombytes(mic_data)
 
-        # Mic upmix：mono → stereo（複製到左右聲道）
+        # Mic upmix：mono → stereo（L/R 複製相同 sample）
         if mic_ch == 1 and sys_ch == 2:
             stereo = array.array('h')
             for s in mic_arr:
@@ -441,10 +496,9 @@ class MeetingRecorderApp:
                 stereo.append(s)
             mic_arr = stereo
 
-        # 截到相同長度（兩個執行緒可能有微小差異）
+        # 兩個執行緒可能有微小長度差異，截到短的那個
         length = min(len(sys_arr), len(mic_arr))
 
-        # 混音：各 0.6 權重，clamp 防止 Int16 爆音
         mixed = array.array('h', [
             max(-32768, min(32767, int(sys_arr[i] * 0.6 + mic_arr[i] * 0.6)))
             for i in range(length)
@@ -453,48 +507,65 @@ class MeetingRecorderApp:
 
     # ---- 儲存執行緒 ----
     def _save_after_stop(self):
-        """等待所有錄音執行緒結束後，轉換並儲存 MP3"""
+        """
+        等待所有錄音執行緒結束後，轉換並儲存 MP3。
+        join timeout=3s：足以涵蓋最壞情況（OSError recovery 的 0.5s sleep + 重開 stream）。
+        """
         if self._record_thread:
             self._record_thread.join(timeout=3)
         if self._mic_thread:
             self._mic_thread.join(timeout=3)
 
         try:
-            mode = self.record_mode.get()
+            mode = self._save_mode  # 已在主執行緒鎖定，不從 tkinter StringVar 讀取
 
             if mode == "system":
                 if not self.record_frames:
                     self.msg_queue.put(("error", "沒有錄到任何音訊"))
                     return
-                pcm_data   = b"".join(self.record_frames)
-                channels   = self.record_channels
+                pcm_data    = b"".join(self.record_frames)
+                channels    = self.record_channels
                 sample_rate = self.record_sample_rate
 
             elif mode == "mic":
                 if not self.mic_frames:
                     self.msg_queue.put(("error", "沒有錄到任何音訊（麥克風）"))
                     return
-                pcm_data   = b"".join(self.mic_frames)
-                channels   = self.record_mic_channels
+                pcm_data    = b"".join(self.mic_frames)
+                channels    = self.record_mic_channels
                 sample_rate = self.record_mic_rate
 
             else:  # "both"
-                if not self.record_frames and not self.mic_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何音訊"))
+                if not self.record_frames:
+                    self.msg_queue.put(("error", "沒有錄到任何系統音訊"))
                     return
-                self.msg_queue.put(("status", "混音中..."))
-                pcm_data   = self._mix_pcm(
-                    b"".join(self.record_frames), self.record_channels,
-                    b"".join(self.mic_frames),    self.record_mic_channels,
-                )
-                channels    = self.record_channels
-                sample_rate = self.record_sample_rate
+
+                if not self.mic_frames:
+                    # 麥克風無資料（開啟失敗或立即斷線），退回純系統音訊並警告
+                    self.msg_queue.put(("warning", "麥克風無資料，改以「電腦聲音」模式儲存"))
+                    pcm_data    = b"".join(self.record_frames)
+                    channels    = self.record_channels
+                    sample_rate = self.record_sample_rate
+                else:
+                    if self.record_mic_rate != self.record_sample_rate:
+                        # 取樣率不一致，混音仍繼續但聲速會有輕微偏差
+                        self.msg_queue.put(("warning",
+                            f"麥克風取樣率（{self.record_mic_rate} Hz）與系統音訊"
+                            f"（{self.record_sample_rate} Hz）不一致，麥克風聲音可能略有偏差"))
+
+                    self.msg_queue.put(("status", "混音中..."))
+                    pcm_data = self._mix_pcm(
+                        b"".join(self.record_frames), self.record_channels,
+                        b"".join(self.mic_frames),    self.record_mic_channels,
+                    )
+                    channels    = self.record_channels
+                    sample_rate = self.record_sample_rate
 
             encoder = lameenc.Encoder()
             encoder.set_bit_rate(128)
             encoder.set_in_sample_rate(sample_rate)
             encoder.set_channels(channels)
-            encoder.set_quality(2)
+            encoder.set_quality(2)  # 2=高品質，7=快速低品質
 
             mp3_data = encoder.encode(pcm_data) + encoder.flush()
 
@@ -503,6 +574,7 @@ class MeetingRecorderApp:
                 "meeting_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             )
 
+            # 同名已存在時自動加流水號，避免覆蓋
             filepath = os.path.join(self.save_folder, f"{base_name}.mp3")
             counter = 2
             while os.path.exists(filepath):
@@ -525,34 +597,53 @@ class MeetingRecorderApp:
         self.log_text.config(state="disabled")
 
     def _reset_ui_after_stop(self):
-        """錄音結束後還原 UI 狀態"""
+        """錄音與儲存流程完全結束後，還原所有 UI 元件狀態"""
         self.btn_record.config(state="normal", text="⏺  開始錄音")
         self.timer_label.config(text="00:00", foreground="gray")
         self.silence_banner.grid_remove()
         self._set_mode_radios_state("normal")
 
     def _poll_queue(self):
-        """每 100ms 從 queue 拉訊息更新 UI"""
+        """
+        每 100ms 從 msg_queue 拉訊息更新 UI。
+        所有 UI 操作都在此（主執行緒）執行，背景執行緒只放訊息進 queue。
+
+        訊息類型：
+          saved           — 儲存成功，data = filepath
+          error           — 致命錯誤，data = 錯誤訊息
+          warning         — 非致命警告，data = 警告訊息（顯示在 log，不中止流程）
+          status          — 狀態文字更新，data = 狀態字串
+          silence_warning — 靜音偵測，data = True（顯示）/ False（隱藏）
+        """
         try:
             while True:
                 msg_type, data = self.msg_queue.get_nowait()
+
                 if msg_type == "saved":
                     filename = os.path.basename(data)
                     self._log(f"✓  {filename}")
                     self._reset_ui_after_stop()
                     self.status_label.config(text=f"已儲存：{filename}", foreground="green")
+
                 elif msg_type == "error":
                     self._log(f"[ERROR] {data}")
                     self._reset_ui_after_stop()
                     self.status_label.config(text="發生錯誤，請查看記錄", foreground="red")
                     self.is_recording = False
+
+                elif msg_type == "warning":
+                    # 非致命：顯示在 log 但不中斷流程
+                    self._log(f"[WARNING] {data}")
+
                 elif msg_type == "status":
                     self.status_label.config(text=data, foreground="gray")
+
                 elif msg_type == "silence_warning":
                     if data:
                         self.silence_banner.grid(row=4, column=0, sticky="ew", padx=14, pady=(0, 6))
                     else:
                         self.silence_banner.grid_remove()
+
         except queue.Empty:
             pass
         self.root.after(100, self._poll_queue)
