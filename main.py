@@ -300,18 +300,6 @@ class MeetingRecorderApp:
         self.start_time    = time.time()
         mode = self.record_mode.get()
 
-        # Mode "both"：預先偵測 loopback 裝置規格，
-        # 讓麥克風 worker 啟動時就能對齊 sample_rate，避免兩個 worker 的 race condition
-        if mode == "both":
-            try:
-                p = pyaudio.PyAudio()
-                device = get_loopback_device(p)
-                self.record_channels    = min(device["maxInputChannels"] or 2, 2)
-                self.record_sample_rate = int(device["defaultSampleRate"])
-                p.terminate()
-            except Exception:
-                pass  # 保留預設值 44100 Hz，_record_worker 啟動後會更新
-
         self.btn_record.config(text="⏹  停止並儲存")
         self.status_label.config(text="錄音中...", foreground="red")
         self.timer_label.config(foreground="red")
