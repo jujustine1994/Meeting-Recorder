@@ -338,7 +338,7 @@ class MeetingRecorderApp:
         ttk.Progressbar(frame_mic, variable=mic_level,
                         maximum=100, length=340).grid(row=1, column=0, columnspan=2,
                                                        sticky="ew", pady=(0, 4))
-        mic_status = ttk.Label(frame_mic, text="按下測試，對著麥克風說話，音量條應有反應",
+        mic_status = ttk.Label(frame_mic, text="請對著麥克風說話，確認音量指示條有所反應",
                                foreground="gray")
         mic_status.grid(row=2, column=0, columnspan=2, sticky="w")
         btn_mic = ttk.Button(frame_mic, text="▶ 開始測試")
@@ -391,7 +391,7 @@ class MeetingRecorderApp:
                 return
             idx = next((d[1] for d in input_devices if d[0] == in_var.get()), None)
             mic_running[0] = True
-            mic_status.config(text="測試中… 對著麥克風說話，音量條應有反應", foreground="#0078D4")
+            mic_status.config(text="測試中，請對著麥克風說話，確認音量指示條有所反應", foreground="#0078D4")
             btn_mic.config(state="disabled")
             btn_mic_stop.config(state="normal")
             threading.Thread(target=mic_worker, args=(idx,), daemon=True).start()
@@ -421,7 +421,7 @@ class MeetingRecorderApp:
                         maximum=100, length=340).grid(row=1, column=0, columnspan=2,
                                                        sticky="ew", pady=(0, 4))
         sys_status = ttk.Label(frame_sys,
-                               text="請先隨便播放有聲音的東西（音樂、影片），再按測試",
+                               text="請先播放任意音訊（音樂、影片等），再按下開始測試",
                                foreground="gray")
         sys_status.grid(row=2, column=0, columnspan=2, sticky="w")
         btn_sys = ttk.Button(frame_sys, text="▶ 開始測試")
@@ -471,7 +471,7 @@ class MeetingRecorderApp:
             out_name = out_var.get()
             sys_running[0] = True
             sys_status.config(
-                text="測試中… 音量條有動 = 錄音正常，沒有動 = 請確認有在播放聲音",
+                text="測試中，音量指示條有反應表示系統音訊可正常錄製",
                 foreground="#0078D4")
             btn_sys.config(state="disabled")
             btn_sys_stop.config(state="normal")
