@@ -230,37 +230,44 @@ class MeetingRecorderApp:
         modes_info = [
             (
                 "🖥  電腦聲音",
-                "錄製所有從電腦播放的聲音。\n"
-                "適用：Teams、Zoom、YouTube、任何會議軟體。\n"
-                "使用 WASAPI Loopback 技術，靜音狀態下依音效卡而定仍可錄音。",
+                "錄製所有從電腦播放的聲音。\n使用 WASAPI Loopback 技術，靜音狀態下依音效卡而定仍可錄音。",
+                "Teams、Zoom、YouTube、任何會議軟體",
                 sys_rate_text,
             ),
             (
                 "🎙  麥克風",
-                "只錄你說話的聲音，不含電腦播放的內容。\n"
-                "適用：只需要記錄自己發言的場合。",
+                "只錄你說話的聲音，不含電腦播放的內容。",
+                "只需要記錄自己發言的場合",
                 mic_rate_text,
             ),
             (
                 "🔀  系統 + 麥克風",
-                "同時錄製電腦聲音與麥克風，存檔前混成一軌。\n"
-                "適用：想同時保留會議音訊與自己的旁白。\n"
-                "注意：若兩者取樣率不同，麥克風聲音速度可能略有偏差。",
+                "同時錄製電腦聲音與麥克風，存檔前混成一軌。\n注意：若兩者取樣率不同，麥克風聲音速度可能略有偏差。",
+                "想同時保留會議音訊與自己的旁白",
                 f"系統 {sys_rate_text}  ／  麥克風 {mic_rate_text}",
             ),
         ]
 
-        for i, (title, desc, rate) in enumerate(modes_info):
+        for i, (title, body, use_case, rate) in enumerate(modes_info):
             lf = ttk.LabelFrame(win, text=f"  {title}  ", padding=10)
             lf.grid(row=i, column=0, sticky="ew", padx=16, pady=(12 if i == 0 else 4, 4))
 
-            ttk.Label(lf, text=desc, wraplength=320, justify="left").grid(
-                row=0, column=0, sticky="w"
-            )
+            # 適用場合：藍色粗體，讓使用者一眼找到選擇依據
+            tk.Label(
+                lf, text=f"✦ 適用：{use_case}",
+                foreground="#0078D4", font=("", 10, "bold"),
+                justify="left",
+            ).grid(row=0, column=0, sticky="w")
+
+            ttk.Label(
+                lf, text=body, wraplength=320, justify="left",
+                foreground="#444444",
+            ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
             ttk.Label(
                 lf, text=f"取樣率：{rate}",
                 foreground="gray", font=("", 8)
-            ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+            ).grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         ttk.Label(
             win,
