@@ -317,7 +317,8 @@ class MeetingRecorderApp:
                 pass
         p_enum.terminate()
 
-        # --- 測試狀態旗標（用 list 讓 closure 可修改）---
+        # 測試狀態旗標：用單元素 list 包裝，讓巢狀 closure 可以修改其值
+        # （Python 3 closure 可讀取外層變數，但無法直接對其重新賦值；list 可繞過此限制）
         mic_running  = [False]
         sys_running  = [False]
 
@@ -346,14 +347,17 @@ class MeetingRecorderApp:
         btn_mic_stop = ttk.Button(frame_mic, text="■ 停止", state="disabled")
         btn_mic_stop.grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
-        def mic_poll():
-            if mic_running[0]:
-                try:
-                    win.after(80, mic_poll)
-                except Exception:
-                    pass
-
         def mic_worker(device_idx):
+            """
+            背景執行緒：持續讀取麥克風音訊並更新音量指示條。
+
+            RMS 範圍 0~32767（Int16 最大值），除以 327.67 換算為 0~100 的百分比。
+            mic_level.set() 直接從背景執行緒呼叫：tkinter DoubleVar 的 set 在 CPython
+            下是執行緒安全的，Progressbar 會在下次主迴圈繪製時反映新值。
+
+            finally 中的 win.after(0, ...) 用來將 UI 還原操作排回主執行緒執行，
+            外層 try/except 防止視窗已關閉時 after() 拋出 TclError。
+            """
             p = pyaudio.PyAudio()
             try:
                 stream = p.open(format=pyaudio.paInt16, channels=1, rate=44100,
@@ -365,7 +369,7 @@ class MeetingRecorderApp:
                     try:
                         mic_level.set(min(100, rms / 327.67))
                     except Exception:
-                        break
+                        break  # 視窗已關閉，DoubleVar 失效，結束迴圈
                 stream.stop_stream()
                 stream.close()
             except Exception as e:
@@ -430,6 +434,13 @@ class MeetingRecorderApp:
         btn_sys_stop.grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
         def sys_worker(output_name):
+            """
+            背景執行緒：透過 WASAPI Loopback 持續讀取系統音訊並更新音量指示條。
+
+            output_name 為「系統預設」時傳 None 給 get_loopback_device，
+            由該函式自動比對系統預設輸出裝置對應的 loopback。
+            其餘邏輯同 mic_worker（RMS 換算、執行緒安全、視窗關閉防護）。
+            """
             p = pyaudio.PyAudio()
             try:
                 device = get_loopback_device(p, output_name if output_name != "系統預設" else None)
@@ -444,7 +455,7 @@ class MeetingRecorderApp:
                     try:
                         sys_level.set(min(100, rms / 327.67))
                     except Exception:
-                        break
+                        break  # 視窗已關閉，結束迴圈
                 stream.stop_stream()
                 stream.close()
             except Exception as e:
