@@ -202,25 +202,54 @@ class MeetingRecorderApp:
     def _record_worker(self):
         p = pyaudio.PyAudio()
         try:
-            device = get_loopback_device(p)
-            # MP3 最多支援 2 聲道
-            self.record_channels = min(device["maxInputChannels"] or 2, 2)
-            self.record_sample_rate = int(device["defaultSampleRate"])
             chunk = 512
 
-            stream = p.open(
-                format=pyaudio.paInt16,
-                channels=self.record_channels,
-                rate=self.record_sample_rate,
-                frames_per_buffer=chunk,
-                input=True,
-                input_device_index=device["index"],
-            )
+            def open_stream(channels=None, sample_rate=None):
+                """取得當前預設播放裝置的 loopback stream，沿用指定的格式參數"""
+                device = get_loopback_device(p)
+                ch = channels or min(device["maxInputChannels"] or 2, 2)
+                sr = sample_rate or int(device["defaultSampleRate"])
+                s = p.open(
+                    format=pyaudio.paInt16,
+                    channels=ch,
+                    rate=sr,
+                    frames_per_buffer=chunk,
+                    input=True,
+                    input_device_index=device["index"],
+                )
+                return s, ch, sr
+
+            stream, self.record_channels, self.record_sample_rate = open_stream()
+
             while self.is_recording:
-                data = stream.read(chunk, exception_on_overflow=False)
-                self.record_frames.append(data)
-            stream.stop_stream()
-            stream.close()
+                try:
+                    data = stream.read(chunk, exception_on_overflow=False)
+                    self.record_frames.append(data)
+                except OSError:
+                    # 裝置失效（插拔耳機 / 切換播放裝置），重新取得新裝置
+                    # 沿用原格式（channels/sample_rate）確保 PCM 資料前後一致
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
+                    time.sleep(0.5)  # 等 Windows 完成裝置切換
+                    if not self.is_recording:
+                        break
+                    try:
+                        stream, _, _ = open_stream(
+                            channels=self.record_channels,
+                            sample_rate=self.record_sample_rate,
+                        )
+                    except Exception:
+                        continue
+
+            try:
+                stream.stop_stream()
+                stream.close()
+            except Exception:
+                pass
+
         except Exception as e:
             self.msg_queue.put(("error", str(e)))
         finally:
