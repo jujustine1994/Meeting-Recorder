@@ -136,9 +136,9 @@ class MeetingRecorderApp:
         frame_mode.grid(row=1, column=0, sticky="ew", **pad)
 
         modes = [
-            ("電腦聲音", "system"),
-            ("麥克風",   "mic"),
-            ("兩者混音", "both"),
+            ("電腦聲音",      "system"),
+            ("麥克風",        "mic"),
+            ("系統 + 麥克風", "both"),
         ]
         self._mode_radios = []
         for text, value in modes:
@@ -148,6 +148,11 @@ class MeetingRecorderApp:
             )
             rb.pack(side="left", padx=(0, 20))
             self._mode_radios.append(rb)
+
+        ttk.Button(
+            frame_mode, text=" ? ", width=3,
+            command=self._show_mode_help,
+        ).pack(side="right")
 
         # row=2  檔案名稱
         frame_name = ttk.LabelFrame(self.root, text=" 檔案名稱 ", padding=8)
@@ -211,6 +216,63 @@ class MeetingRecorderApp:
         self._log("請確認儲存位置與錄音模式，然後按「開始錄音」。")
 
     # ---- UI 互動 ----
+    def _show_mode_help(self):
+        """錄音模式說明彈窗"""
+        win = tk.Toplevel(self.root)
+        win.title("錄音模式說明")
+        win.resizable(False, False)
+        win.grab_set()  # modal，關閉前不能操作主視窗
+
+        # 取樣率顯示：錄音後為實際偵測值，錄音前為預設值
+        sys_rate_text  = f"{self.record_sample_rate} Hz  /  {'立體聲' if self.record_channels == 2 else '單聲道'}"
+        mic_rate_text  = f"{self.record_mic_rate} Hz  /  單聲道"
+
+        modes_info = [
+            (
+                "🖥  電腦聲音",
+                "錄製所有從電腦播放的聲音。\n"
+                "適用：Teams、Zoom、YouTube、任何會議軟體。\n"
+                "使用 WASAPI Loopback 技術，靜音狀態下依音效卡而定仍可錄音。",
+                sys_rate_text,
+            ),
+            (
+                "🎙  麥克風",
+                "只錄你說話的聲音，不含電腦播放的內容。\n"
+                "適用：只需要記錄自己發言的場合。",
+                mic_rate_text,
+            ),
+            (
+                "🔀  系統 + 麥克風",
+                "同時錄製電腦聲音與麥克風，存檔前混成一軌。\n"
+                "適用：想同時保留會議音訊與自己的旁白。\n"
+                "注意：若兩者取樣率不同，麥克風聲音速度可能略有偏差。",
+                f"系統 {sys_rate_text}  ／  麥克風 {mic_rate_text}",
+            ),
+        ]
+
+        for i, (title, desc, rate) in enumerate(modes_info):
+            lf = ttk.LabelFrame(win, text=f"  {title}  ", padding=10)
+            lf.grid(row=i, column=0, sticky="ew", padx=16, pady=(12 if i == 0 else 4, 4))
+
+            ttk.Label(lf, text=desc, wraplength=320, justify="left").grid(
+                row=0, column=0, sticky="w"
+            )
+            ttk.Label(
+                lf, text=f"取樣率：{rate}",
+                foreground="gray", font=("", 8)
+            ).grid(row=1, column=0, sticky="w", pady=(6, 0))
+
+        ttk.Label(
+            win,
+            text="* 取樣率於首次錄音後更新為實際裝置數值",
+            foreground="gray", font=("", 8)
+        ).grid(row=len(modes_info), column=0, padx=16, sticky="w")
+
+        ttk.Button(win, text="關閉", command=win.destroy).grid(
+            row=len(modes_info) + 1, column=0, pady=12
+        )
+        win.columnconfigure(0, weight=1)
+
     def _change_folder(self):
         folder = filedialog.askdirectory(
             title="選擇錄音檔儲存位置",
