@@ -45,18 +45,23 @@ def show_cth_banner():
 
 
 # ---- 音訊裝置 ----
-def get_loopback_device(p: pyaudio.PyAudio) -> dict:
+def get_loopback_device(p: pyaudio.PyAudio, preferred_output_name: str = None) -> dict:
     """
-    取得系統預設輸出的 WASAPI Loopback 裝置。
+    取得 WASAPI Loopback 裝置。
 
-    pyaudiowpatch 為每個輸出裝置產生一個對應的虛擬 loopback 輸入裝置，
-    名稱包含原裝置名稱。若 defaultOutputDevice 本身不是 loopback，
-    就用名稱比對找到對應的 loopback 裝置。
+    preferred_output_name 不為 None 時，優先找名稱包含該字串的 loopback 裝置
+    （對應使用者在裝置測試中選擇的輸出裝置）。
+    找不到或未指定時，退回系統預設輸出裝置對應的 loopback。
     """
     try:
         wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     except OSError:
         raise RuntimeError("找不到 WASAPI 音訊裝置，請確認音效卡驅動正常。")
+
+    if preferred_output_name:
+        for loopback in p.get_loopback_device_info_generator():
+            if preferred_output_name in loopback["name"]:
+                return loopback
 
     default_speakers = p.get_device_info_by_index(wasapi_info["defaultOutputDevice"])
 
@@ -101,6 +106,10 @@ class MeetingRecorderApp:
         self._record_thread: threading.Thread | None = None
         self._mic_thread:    threading.Thread | None = None
         self._save_mode: str = "system"        # 儲存時使用的模式，在停止時鎖定避免 race condition
+
+        # 裝置選擇（None = 系統預設）
+        self.selected_input_idx:    int | None = None   # 麥克風裝置 index
+        self.selected_output_name:  str | None = None   # 輸出裝置名稱（用於比對 loopback）
 
         # 儲存設定
         desktop = os.path.join(os.path.expanduser("~"), "Desktop")
@@ -192,6 +201,11 @@ class MeetingRecorderApp:
         )
         self.status_label.pack(pady=(4, 0))
 
+        ttk.Button(
+            frame_btn, text="🔧 裝置設定與測試",
+            command=self._show_device_test,
+        ).pack(pady=(12, 0))
+
         # row=4  靜音警告橫幅（預設隱藏，偵測到連續靜音才顯示）
         self.silence_banner = tk.Frame(self.root, background="#FFA500", padx=12, pady=8)
         tk.Label(
@@ -278,6 +292,219 @@ class MeetingRecorderApp:
         ttk.Button(win, text="關閉", command=win.destroy).grid(
             row=len(modes_info) + 1, column=0, pady=12
         )
+        win.columnconfigure(0, weight=1)
+
+    def _show_device_test(self):
+        """裝置設定與測試對話框：錄音前確認麥克風與系統音訊是否有訊號"""
+        win = tk.Toplevel(self.root)
+        win.title("裝置設定與測試")
+        win.resizable(False, False)
+        win.grab_set()
+        pad = {"padx": 14, "pady": 6}
+
+        # --- 列舉裝置 ---
+        p_enum = pyaudio.PyAudio()
+        input_devices  = [("系統預設", None)]   # (顯示名稱, device_index)
+        output_devices = [("系統預設", None)]   # (顯示名稱, device_name_for_loopback)
+        for i in range(p_enum.get_device_count()):
+            try:
+                info = p_enum.get_device_info_by_index(i)
+                if info["maxInputChannels"] > 0 and not info.get("isLoopbackDevice", False):
+                    input_devices.append((info["name"], i))
+                if info["maxOutputChannels"] > 0 and not info.get("isLoopbackDevice", False):
+                    output_devices.append((info["name"], info["name"]))
+            except Exception:
+                pass
+        p_enum.terminate()
+
+        # --- 測試狀態旗標（用 list 讓 closure 可修改）---
+        mic_running  = [False]
+        sys_running  = [False]
+
+        # ===================== 麥克風區塊 =====================
+        frame_mic = ttk.LabelFrame(win, text=" 🎙  輸入裝置（麥克風） ", padding=10)
+        frame_mic.grid(row=0, column=0, sticky="ew", **pad)
+        frame_mic.columnconfigure(0, weight=1)
+
+        in_var = tk.StringVar()
+        in_var.set(next((d[0] for d in input_devices if d[1] == self.selected_input_idx),
+                        "系統預設"))
+        ttk.Combobox(frame_mic, textvariable=in_var,
+                     values=[d[0] for d in input_devices],
+                     state="readonly", width=42).grid(row=0, column=0, columnspan=2,
+                                                       sticky="ew", pady=(0, 8))
+
+        mic_level = tk.DoubleVar(value=0)
+        ttk.Progressbar(frame_mic, variable=mic_level,
+                        maximum=100, length=340).grid(row=1, column=0, columnspan=2,
+                                                       sticky="ew", pady=(0, 4))
+        mic_status = ttk.Label(frame_mic, text="按下測試，對著麥克風說話，音量條應有反應",
+                               foreground="gray")
+        mic_status.grid(row=2, column=0, columnspan=2, sticky="w")
+        btn_mic = ttk.Button(frame_mic, text="▶ 開始測試")
+        btn_mic.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        btn_mic_stop = ttk.Button(frame_mic, text="■ 停止", state="disabled")
+        btn_mic_stop.grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+
+        def mic_poll():
+            if mic_running[0]:
+                try:
+                    win.after(80, mic_poll)
+                except Exception:
+                    pass
+
+        def mic_worker(device_idx):
+            p = pyaudio.PyAudio()
+            try:
+                stream = p.open(format=pyaudio.paInt16, channels=1, rate=44100,
+                                frames_per_buffer=512, input=True,
+                                input_device_index=device_idx)
+                while mic_running[0]:
+                    data = stream.read(512, exception_on_overflow=False)
+                    rms  = _compute_rms(data)
+                    try:
+                        mic_level.set(min(100, rms / 327.67))
+                    except Exception:
+                        break
+                stream.stop_stream()
+                stream.close()
+            except Exception as e:
+                try:
+                    win.after(0, lambda: mic_status.config(
+                        text=f"錯誤：{e}", foreground="red"))
+                except Exception:
+                    pass
+            finally:
+                p.terminate()
+                mic_running[0] = False
+                try:
+                    win.after(0, lambda: (
+                        btn_mic.config(state="normal"),
+                        btn_mic_stop.config(state="disabled"),
+                        mic_level.set(0),
+                    ))
+                except Exception:
+                    pass
+
+        def start_mic_test():
+            if mic_running[0]:
+                return
+            idx = next((d[1] for d in input_devices if d[0] == in_var.get()), None)
+            mic_running[0] = True
+            mic_status.config(text="測試中… 對著麥克風說話，音量條應有反應", foreground="#0078D4")
+            btn_mic.config(state="disabled")
+            btn_mic_stop.config(state="normal")
+            threading.Thread(target=mic_worker, args=(idx,), daemon=True).start()
+
+        def stop_mic_test():
+            mic_running[0] = False
+            mic_status.config(text="已停止", foreground="gray")
+
+        btn_mic.config(command=start_mic_test)
+        btn_mic_stop.config(command=stop_mic_test)
+
+        # ===================== 電腦聲音區塊 =====================
+        frame_sys = ttk.LabelFrame(win, text=" 🖥  電腦聲音（WASAPI Loopback） ", padding=10)
+        frame_sys.grid(row=1, column=0, sticky="ew", **pad)
+        frame_sys.columnconfigure(0, weight=1)
+
+        out_var = tk.StringVar()
+        out_var.set(next((d[0] for d in output_devices if d[1] == self.selected_output_name),
+                         "系統預設"))
+        ttk.Combobox(frame_sys, textvariable=out_var,
+                     values=[d[0] for d in output_devices],
+                     state="readonly", width=42).grid(row=0, column=0, columnspan=2,
+                                                       sticky="ew", pady=(0, 8))
+
+        sys_level = tk.DoubleVar(value=0)
+        ttk.Progressbar(frame_sys, variable=sys_level,
+                        maximum=100, length=340).grid(row=1, column=0, columnspan=2,
+                                                       sticky="ew", pady=(0, 4))
+        sys_status = ttk.Label(frame_sys,
+                               text="請先隨便播放有聲音的東西（音樂、影片），再按測試",
+                               foreground="gray")
+        sys_status.grid(row=2, column=0, columnspan=2, sticky="w")
+        btn_sys = ttk.Button(frame_sys, text="▶ 開始測試")
+        btn_sys.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        btn_sys_stop = ttk.Button(frame_sys, text="■ 停止", state="disabled")
+        btn_sys_stop.grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
+
+        def sys_worker(output_name):
+            p = pyaudio.PyAudio()
+            try:
+                device = get_loopback_device(p, output_name if output_name != "系統預設" else None)
+                ch = min(device["maxInputChannels"] or 2, 2)
+                sr = int(device["defaultSampleRate"])
+                stream = p.open(format=pyaudio.paInt16, channels=ch, rate=sr,
+                                frames_per_buffer=512, input=True,
+                                input_device_index=device["index"])
+                while sys_running[0]:
+                    data = stream.read(512, exception_on_overflow=False)
+                    rms  = _compute_rms(data)
+                    try:
+                        sys_level.set(min(100, rms / 327.67))
+                    except Exception:
+                        break
+                stream.stop_stream()
+                stream.close()
+            except Exception as e:
+                try:
+                    win.after(0, lambda: sys_status.config(
+                        text=f"錯誤：{e}", foreground="red"))
+                except Exception:
+                    pass
+            finally:
+                p.terminate()
+                sys_running[0] = False
+                try:
+                    win.after(0, lambda: (
+                        btn_sys.config(state="normal"),
+                        btn_sys_stop.config(state="disabled"),
+                        sys_level.set(0),
+                    ))
+                except Exception:
+                    pass
+
+        def start_sys_test():
+            if sys_running[0]:
+                return
+            out_name = out_var.get()
+            sys_running[0] = True
+            sys_status.config(
+                text="測試中… 音量條有動 = 錄音正常，沒有動 = 請確認有在播放聲音",
+                foreground="#0078D4")
+            btn_sys.config(state="disabled")
+            btn_sys_stop.config(state="normal")
+            threading.Thread(target=sys_worker, args=(out_name,), daemon=True).start()
+
+        def stop_sys_test():
+            sys_running[0] = False
+            sys_status.config(text="已停止", foreground="gray")
+
+        btn_sys.config(command=start_sys_test)
+        btn_sys_stop.config(command=stop_sys_test)
+
+        # ===================== 確認 / 取消 =====================
+        frame_btns = tk.Frame(win)
+        frame_btns.grid(row=2, column=0, pady=12)
+
+        def confirm():
+            mic_running[0] = False
+            sys_running[0] = False
+            sel_in  = in_var.get()
+            sel_out = out_var.get()
+            self.selected_input_idx   = next((d[1] for d in input_devices  if d[0] == sel_in),  None)
+            self.selected_output_name = next((d[1] for d in output_devices if d[0] == sel_out), None)
+            win.destroy()
+
+        def on_close():
+            mic_running[0] = False
+            sys_running[0] = False
+            win.destroy()
+
+        ttk.Button(frame_btns, text="確認選擇", command=confirm).pack(side="left", padx=8)
+        ttk.Button(frame_btns, text="取消",     command=on_close).pack(side="left")
+        win.protocol("WM_DELETE_WINDOW", on_close)
         win.columnconfigure(0, weight=1)
 
     def _change_folder(self):
@@ -370,7 +597,7 @@ class MeetingRecorderApp:
 
             def open_stream(channels=None, sample_rate=None):
                 """取得當前預設輸出的 loopback stream，沿用指定格式確保 PCM 連續性"""
-                device = get_loopback_device(p)
+                device = get_loopback_device(p, self.selected_output_name)
                 ch = channels or min(device["maxInputChannels"] or 2, 2)
                 sr = sample_rate or int(device["defaultSampleRate"])
                 s = p.open(
@@ -463,13 +690,15 @@ class MeetingRecorderApp:
                     rate=target_rate,
                     frames_per_buffer=chunk,
                     input=True,
-                    input_device_index=None,  # 系統預設麥克風
+                    input_device_index=self.selected_input_idx,
                 )
                 self.record_mic_channels = 1
                 self.record_mic_rate     = target_rate
             except Exception:
                 # 麥克風不支援目標 rate，退回麥克風原生 rate
-                dev_info = p.get_default_input_device_info()
+                dev_info = (p.get_device_info_by_index(self.selected_input_idx)
+                            if self.selected_input_idx is not None
+                            else p.get_default_input_device_info())
                 fallback = int(dev_info["defaultSampleRate"])
                 stream = p.open(
                     format=pyaudio.paInt16,
@@ -477,7 +706,7 @@ class MeetingRecorderApp:
                     rate=fallback,
                     frames_per_buffer=chunk,
                     input=True,
-                    input_device_index=None,
+                    input_device_index=self.selected_input_idx,
                 )
                 self.record_mic_channels = 1
                 self.record_mic_rate     = fallback
