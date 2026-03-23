@@ -302,13 +302,21 @@ class MeetingRecorderApp:
         win.grab_set()
         pad = {"padx": 14, "pady": 6}
 
-        # --- 列舉裝置 ---
+        # --- 列舉裝置（僅 WASAPI，與 Windows 設定顯示一致）---
+        # PortAudio 會對同一個實體裝置透過 MME / DirectSound / WASAPI 各列一次，
+        # 造成下拉選單出現大量重複項目。過濾只保留 WASAPI host API 的裝置即可。
         p_enum = pyaudio.PyAudio()
         input_devices  = [("系統預設", None)]   # (顯示名稱, device_index)
         output_devices = [("系統預設", None)]   # (顯示名稱, device_name_for_loopback)
+        try:
+            wasapi_idx = p_enum.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
+        except Exception:
+            wasapi_idx = None  # 取不到時不過濾，保留全部
         for i in range(p_enum.get_device_count()):
             try:
                 info = p_enum.get_device_info_by_index(i)
+                if wasapi_idx is not None and info["hostApi"] != wasapi_idx:
+                    continue  # 略過非 WASAPI 的裝置
                 if info["maxInputChannels"] > 0 and not info.get("isLoopbackDevice", False):
                     input_devices.append((info["name"], i))
                 if info["maxOutputChannels"] > 0 and not info.get("isLoopbackDevice", False):
