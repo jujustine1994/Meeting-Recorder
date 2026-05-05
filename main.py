@@ -983,14 +983,16 @@ class MeetingRecorderApp:
 
                 output_mode = self._save_output_mode
                 saved_paths = []
+                sys_frames_snap = list(self.record_frames)
+                mic_frames_snap = list(self.mic_frames)
 
                 # ---- 獨立音軌 ----
                 if output_mode in ("separate", "both"):
                     sys_mp3 = self._encode_to_mp3(
-                        b"".join(self.record_frames),
+                        b"".join(sys_frames_snap),
                         self.record_channels, self.record_sample_rate)
                     mic_mp3 = self._encode_to_mp3(
-                        b"".join(self.mic_frames),
+                        b"".join(mic_frames_snap),
                         self.record_mic_channels, self.record_mic_rate)
                     saved_paths.append(self._save_file(sys_mp3, base_name, "_system"))
                     saved_paths.append(self._save_file(mic_mp3, base_name, "_mic"))
@@ -1003,12 +1005,12 @@ class MeetingRecorderApp:
                             f"（{self.record_sample_rate} Hz）不一致，麥克風聲音可能略有偏差"))
 
                     self.msg_queue.put(("status", "混音中..."))
-                    sys_pcm = b"".join(self.record_frames)
-                    mic_pcm = b"".join(self.mic_frames)
+                    sys_pcm = b"".join(sys_frames_snap)
+                    mic_pcm = b"".join(mic_frames_snap)
 
                     if self._save_equalize:
                         sys_gain, mic_gain = self._compute_equalize_gain(
-                            self.record_frames, self.mic_frames,
+                            sys_frames_snap, mic_frames_snap,
                             filter_silence=self._save_filter_silence,
                             gain_cap=self._save_gain_cap,
                         )
@@ -1022,6 +1024,9 @@ class MeetingRecorderApp:
                         mixed_pcm, self.record_channels, self.record_sample_rate)
                     saved_paths.append(self._save_file(merged_mp3, base_name))
 
+                if not saved_paths:
+                    self.msg_queue.put(("error", f"未知的輸出模式：{output_mode}"))
+                    return
                 self.msg_queue.put(("saved", saved_paths))
                 return
 
