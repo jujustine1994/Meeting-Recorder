@@ -964,8 +964,8 @@ class MeetingRecorderApp:
         self._set_mode_radios_state("normal")
         self.vu_system_var.set(0)
         self.vu_mic_var.set(0)
-        self.vu_system_pct.config(text="  0%")
-        self.vu_mic_pct.config(text="  0%")
+        self.vu_system_pct.config(text=f"{0:3d}%")
+        self.vu_mic_pct.config(text=f"{0:3d}%")
 
     def _poll_queue(self):
         """
@@ -1001,12 +1001,14 @@ class MeetingRecorderApp:
                     self._log(f"[WARNING] {data}")
 
                 elif msg_type == "vu_system":
-                    self.vu_system_var.set(data)
-                    self.vu_system_pct.config(text=f"{int(data):3d}%")
+                    val = max(0.0, min(100.0, float(data)))
+                    self.vu_system_var.set(val)
+                    self.vu_system_pct.config(text=f"{int(val):3d}%")
 
                 elif msg_type == "vu_mic":
-                    self.vu_mic_var.set(data)
-                    self.vu_mic_pct.config(text=f"{int(data):3d}%")
+                    val = max(0.0, min(100.0, float(data)))
+                    self.vu_mic_var.set(val)
+                    self.vu_mic_pct.config(text=f"{int(val):3d}%")
 
                 elif msg_type == "status":
                     self.status_label.config(text=data, foreground="gray")
