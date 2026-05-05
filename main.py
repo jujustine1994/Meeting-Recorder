@@ -858,6 +858,49 @@ class MeetingRecorderApp:
         ])
         return mixed.tobytes()
 
+    @staticmethod
+    def _compute_equalize_gain(
+        sys_frames: list,
+        mic_frames: list,
+        filter_silence: bool = True,
+        gain_cap: float = 4.0,
+    ) -> tuple:
+        """
+        回傳 (sys_gain, mic_gain)。只有較小的那軌 gain > 1.0。
+        filter_silence=True 時排除 RMS < 100 的 chunk，避免靜音段影響平均。
+        任一軌全靜音時回傳 (1.0, 1.0) 不等化。
+        """
+        THRESHOLD = 100
+
+        def active_rms(frames):
+            values = [_compute_rms(c) for c in frames]
+            if filter_silence:
+                values = [v for v in values if v >= THRESHOLD]
+            return (sum(values) / len(values)) if values else 0.0
+
+        sys_rms = active_rms(sys_frames)
+        mic_rms = active_rms(mic_frames)
+
+        if sys_rms == 0 or mic_rms == 0:
+            return 1.0, 1.0
+
+        if sys_rms >= mic_rms:
+            return 1.0, min(sys_rms / mic_rms, gain_cap)
+        else:
+            return min(mic_rms / sys_rms, gain_cap), 1.0
+
+    @staticmethod
+    def _apply_gain_to_pcm(data: bytes, gain: float) -> bytes:
+        """對 Int16 PCM 套用增益倍數，結果 clamp 至 [-32768, 32767]。"""
+        if gain == 1.0:
+            return data
+        arr = array.array('h')
+        arr.frombytes(data)
+        scaled = array.array('h', [
+            max(-32768, min(32767, int(s * gain))) for s in arr
+        ])
+        return scaled.tobytes()
+
     # ---- 儲存輔助方法 ----
     def _encode_to_mp3(self, pcm_data: bytes, channels: int, sample_rate: int) -> bytes:
         encoder = lameenc.Encoder()
