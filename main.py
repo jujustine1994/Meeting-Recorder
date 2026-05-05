@@ -106,6 +106,10 @@ class MeetingRecorderApp:
         self._record_thread: threading.Thread | None = None
         self._mic_thread:    threading.Thread | None = None
         self._save_mode: str = "system"        # 儲存時使用的模式，在停止時鎖定避免 race condition
+        self._save_output_mode: str = "merge"      # 輸出方式快照（停止時從主執行緒鎖定）
+        self._save_equalize: bool = False           # 等化開關快照
+        self._save_gain_cap: float = 4.0            # 增益上限快照
+        self._save_filter_silence: bool = True      # 靜音過濾快照
 
         # 裝置選擇（None = 系統預設）
         self.selected_input_idx:    int | None = None   # 麥克風裝置 index
@@ -116,6 +120,16 @@ class MeetingRecorderApp:
         self.save_folder = desktop
         self.save_folder_var = tk.StringVar(value=desktop)
         self.filename_var    = tk.StringVar()
+
+        # VU Meter
+        self.vu_system_var = tk.DoubleVar(value=0)
+        self.vu_mic_var    = tk.DoubleVar(value=0)
+
+        # 進階設定
+        self.output_mode       = tk.StringVar(value="merge")   # merge / separate / both
+        self.equalize_enabled  = tk.BooleanVar(value=False)
+        self.eq_gain_cap       = tk.IntVar(value=4)            # 倍數上限 1～16
+        self.eq_filter_silence = tk.BooleanVar(value=True)
 
         # 錄音模式（UI 用，tk.StringVar 只在主執行緒存取）
         self.record_mode = tk.StringVar(value="system")
