@@ -569,7 +569,73 @@ class MeetingRecorderApp:
         win.columnconfigure(0, weight=1)
 
     def _show_advanced_settings(self):
-        pass  # 由 Task 9 實作
+        win = tk.Toplevel(self.root)
+        win.title("進階設定")
+        win.resizable(False, False)
+        win.grab_set()
+        pad = {"padx": 14, "pady": 6}
+
+        # 本地變數：pre-populate 目前設定，Cancel 不影響 app 狀態
+        output_var  = tk.StringVar(value=self.output_mode.get())
+        eq_var      = tk.BooleanVar(value=self.equalize_enabled.get())
+        cap_var     = tk.IntVar(value=self.eq_gain_cap.get())
+        filter_var  = tk.BooleanVar(value=self.eq_filter_silence.get())
+
+        # ---- 輸出方式 ----
+        frame_output = ttk.LabelFrame(
+            win, text=" 輸出方式（僅「系統＋麥克風」模式有效） ", padding=10)
+        frame_output.grid(row=0, column=0, sticky="ew", **pad)
+        for text, val in [("合併一軌", "merge"),
+                          ("獨立兩軌", "separate"),
+                          ("兩個都要", "both")]:
+            ttk.Radiobutton(frame_output, text=text,
+                            variable=output_var, value=val).pack(anchor="w")
+
+        # ---- 自動等化 ----
+        frame_eq = ttk.LabelFrame(win, text=" 自動等化音量 ", padding=10)
+        frame_eq.grid(row=1, column=0, sticky="ew", **pad)
+        ttk.Checkbutton(
+            frame_eq,
+            text="自動等化音量（讓麥克風與系統音訊響度接近）",
+            variable=eq_var,
+        ).pack(anchor="w")
+        ttk.Label(
+            frame_eq,
+            text="僅影響含混音的輸出；獨立音軌存原始音量",
+            foreground="gray", font=("", 8),
+        ).pack(anchor="w", pady=(2, 0))
+
+        # ---- 等化進階設定 ----
+        frame_adv = ttk.LabelFrame(win, text=" 等化進階設定 ", padding=10)
+        frame_adv.grid(row=2, column=0, sticky="ew", **pad)
+        frame_adv.columnconfigure(2, weight=1)
+
+        tk.Label(frame_adv, text="增益上限：").grid(row=0, column=0, sticky="w")
+        tk.Spinbox(frame_adv, from_=1, to=16,
+                   textvariable=cap_var, width=5).grid(row=0, column=1, sticky="w", padx=(4, 0))
+        tk.Label(frame_adv, text="x  (1～16)",
+                 foreground="gray").grid(row=0, column=2, sticky="w", padx=(4, 0))
+
+        ttk.Checkbutton(
+            frame_adv,
+            text="靜音過濾：排除靜音段再計算 RMS",
+            variable=filter_var,
+        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        # ---- 確認 / 取消 ----
+        frame_btns = tk.Frame(win)
+        frame_btns.grid(row=3, column=0, pady=12)
+
+        def confirm():
+            self.output_mode.set(output_var.get())
+            self.equalize_enabled.set(eq_var.get())
+            self.eq_gain_cap.set(cap_var.get())
+            self.eq_filter_silence.set(filter_var.get())
+            win.destroy()
+
+        ttk.Button(frame_btns, text="確認", command=confirm).pack(side="left", padx=8)
+        ttk.Button(frame_btns, text="取消", command=win.destroy).pack(side="left")
+        win.columnconfigure(0, weight=1)
 
     def _change_folder(self):
         folder = filedialog.askdirectory(
