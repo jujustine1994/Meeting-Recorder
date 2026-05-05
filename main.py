@@ -829,6 +829,26 @@ class MeetingRecorderApp:
         ])
         return mixed.tobytes()
 
+    # ---- 儲存輔助方法 ----
+    def _encode_to_mp3(self, pcm_data: bytes, channels: int, sample_rate: int) -> bytes:
+        encoder = lameenc.Encoder()
+        encoder.set_bit_rate(128)
+        encoder.set_in_sample_rate(sample_rate)
+        encoder.set_channels(channels)
+        encoder.set_quality(2)
+        return encoder.encode(pcm_data) + encoder.flush()
+
+    def _save_file(self, mp3_data: bytes, base_name: str, suffix: str = "") -> str:
+        name = base_name + suffix
+        filepath = os.path.join(self.save_folder, f"{name}.mp3")
+        counter = 2
+        while os.path.exists(filepath):
+            filepath = os.path.join(self.save_folder, f"{name} ({counter}).mp3")
+            counter += 1
+        with open(filepath, "wb") as f:
+            f.write(mp3_data)
+        return filepath
+
     # ---- 儲存執行緒 ----
     def _save_after_stop(self):
         """
@@ -848,6 +868,11 @@ class MeetingRecorderApp:
 
         try:
             mode = self._save_mode  # 已在主執行緒鎖定，不從 tkinter StringVar 讀取
+
+            custom_name = self.filename_var.get().strip()
+            base_name   = custom_name if custom_name else (
+                "meeting_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            )
 
             if mode == "system":
                 if not self.record_frames:
@@ -891,29 +916,8 @@ class MeetingRecorderApp:
                     channels    = self.record_channels
                     sample_rate = self.record_sample_rate
 
-            encoder = lameenc.Encoder()
-            encoder.set_bit_rate(128)
-            encoder.set_in_sample_rate(sample_rate)
-            encoder.set_channels(channels)
-            encoder.set_quality(2)  # 2=高品質，7=快速低品質
-
-            mp3_data = encoder.encode(pcm_data) + encoder.flush()
-
-            custom_name = self.filename_var.get().strip()
-            base_name   = custom_name if custom_name else (
-                "meeting_" + datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            )
-
-            # 同名已存在時自動加流水號，避免覆蓋
-            filepath = os.path.join(self.save_folder, f"{base_name}.mp3")
-            counter = 2
-            while os.path.exists(filepath):
-                filepath = os.path.join(self.save_folder, f"{base_name} ({counter}).mp3")
-                counter += 1
-
-            with open(filepath, "wb") as f:
-                f.write(mp3_data)
-
+            mp3_data = self._encode_to_mp3(pcm_data, channels, sample_rate)
+            filepath = self._save_file(mp3_data, base_name)
             self.msg_queue.put(("saved", [filepath]))
 
         except Exception as e:
