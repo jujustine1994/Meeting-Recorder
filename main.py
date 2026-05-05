@@ -215,10 +215,33 @@ class MeetingRecorderApp:
         )
         self.status_label.pack(pady=(4, 0))
 
-        ttk.Button(
-            frame_btn, text="🔧 裝置設定與測試",
-            command=self._show_device_test,
-        ).pack(pady=(12, 0))
+        # VU Meter
+        vu_frame = tk.Frame(frame_btn)
+        vu_frame.pack(pady=(12, 0))
+
+        tk.Label(vu_frame, text="系統音訊", width=8, anchor="w",
+                 font=("", 9)).grid(row=0, column=0, padx=(0, 6))
+        ttk.Progressbar(vu_frame, variable=self.vu_system_var,
+                        maximum=100, length=200).grid(row=0, column=1)
+        self.vu_system_pct = ttk.Label(vu_frame, text="  0%", width=5,
+                                        foreground="gray", font=("Consolas", 9))
+        self.vu_system_pct.grid(row=0, column=2, padx=(4, 0))
+
+        tk.Label(vu_frame, text="麥克風", width=8, anchor="w",
+                 font=("", 9)).grid(row=1, column=0, padx=(0, 6), pady=(4, 0))
+        ttk.Progressbar(vu_frame, variable=self.vu_mic_var,
+                        maximum=100, length=200).grid(row=1, column=1, pady=(4, 0))
+        self.vu_mic_pct = ttk.Label(vu_frame, text="  0%", width=5,
+                                     foreground="gray", font=("Consolas", 9))
+        self.vu_mic_pct.grid(row=1, column=2, padx=(4, 0), pady=(4, 0))
+
+        # 裝置設定 + 進階設定 雙按鈕列
+        btn_row = tk.Frame(frame_btn)
+        btn_row.pack(pady=(12, 0))
+        ttk.Button(btn_row, text="🔧 裝置設定與測試",
+                   command=self._show_device_test).pack(side="left", padx=(0, 8))
+        ttk.Button(btn_row, text="⚙ 進階設定",
+                   command=self._show_advanced_settings).pack(side="left")
 
         # row=4  靜音警告橫幅（預設隱藏，偵測到連續靜音才顯示）
         self.silence_banner = tk.Frame(self.root, background="#FFA500", padx=12, pady=8)
@@ -544,6 +567,9 @@ class MeetingRecorderApp:
         ttk.Button(frame_btns, text="取消",     command=on_close).pack(side="left")
         win.protocol("WM_DELETE_WINDOW", on_close)
         win.columnconfigure(0, weight=1)
+
+    def _show_advanced_settings(self):
+        pass  # 由 Task 9 實作
 
     def _change_folder(self):
         folder = filedialog.askdirectory(
@@ -936,6 +962,10 @@ class MeetingRecorderApp:
         self.timer_label.config(text="00:00", foreground="gray")
         self.silence_banner.grid_remove()
         self._set_mode_radios_state("normal")
+        self.vu_system_var.set(0)
+        self.vu_mic_var.set(0)
+        self.vu_system_pct.config(text="  0%")
+        self.vu_mic_pct.config(text="  0%")
 
     def _poll_queue(self):
         """
@@ -969,6 +999,14 @@ class MeetingRecorderApp:
                 elif msg_type == "warning":
                     # 非致命：顯示在 log 但不中斷流程
                     self._log(f"[WARNING] {data}")
+
+                elif msg_type == "vu_system":
+                    self.vu_system_var.set(data)
+                    self.vu_system_pct.config(text=f"{int(data):3d}%")
+
+                elif msg_type == "vu_mic":
+                    self.vu_mic_var.set(data)
+                    self.vu_mic_pct.config(text=f"{int(data):3d}%")
 
                 elif msg_type == "status":
                     self.status_label.config(text=data, foreground="gray")
