@@ -610,11 +610,11 @@ class MeetingRecorderApp:
         frame_adv.grid(row=2, column=0, sticky="ew", **pad)
         frame_adv.columnconfigure(2, weight=1)
 
-        tk.Label(frame_adv, text="增益上限：").grid(row=0, column=0, sticky="w")
-        tk.Spinbox(frame_adv, from_=1, to=16,
-                   textvariable=cap_var, width=5).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        tk.Label(frame_adv, text="x  (1～16)",
-                 foreground="gray").grid(row=0, column=2, sticky="w", padx=(4, 0))
+        ttk.Label(frame_adv, text="增益上限：").grid(row=0, column=0, sticky="w")
+        ttk.Spinbox(frame_adv, from_=1, to=16,
+                    textvariable=cap_var, width=5).grid(row=0, column=1, sticky="w", padx=(4, 0))
+        ttk.Label(frame_adv, text="x  (1～16)",
+                  foreground="gray").grid(row=0, column=2, sticky="w", padx=(4, 0))
 
         ttk.Checkbutton(
             frame_adv,
@@ -629,12 +629,13 @@ class MeetingRecorderApp:
         def confirm():
             self.output_mode.set(output_var.get())
             self.equalize_enabled.set(eq_var.get())
-            self.eq_gain_cap.set(cap_var.get())
+            self.eq_gain_cap.set(max(1, min(16, cap_var.get())))
             self.eq_filter_silence.set(filter_var.get())
             win.destroy()
 
         ttk.Button(frame_btns, text="確認", command=confirm).pack(side="left", padx=8)
         ttk.Button(frame_btns, text="取消", command=win.destroy).pack(side="left")
+        win.protocol("WM_DELETE_WINDOW", win.destroy)
         win.columnconfigure(0, weight=1)
 
     def _change_folder(self):
