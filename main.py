@@ -638,6 +638,10 @@ class MeetingRecorderApp:
 
         # 在主執行緒鎖定模式，避免背景 _save_after_stop 從 tkinter StringVar 讀取
         self._save_mode = self.record_mode.get()
+        self._save_output_mode    = self.output_mode.get()
+        self._save_equalize       = self.equalize_enabled.get()
+        self._save_gain_cap       = float(self.eq_gain_cap.get())
+        self._save_filter_silence = self.eq_filter_silence.get()
 
         self.btn_record.config(state="disabled", text="儲存中...")
         self.status_label.config(text="轉換為 MP3 中...", foreground="gray")
