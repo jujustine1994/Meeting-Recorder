@@ -4,6 +4,13 @@ import struct
 import array
 import unittest
 
+import unittest.mock
+# Mock native audio/encoding libs so tests run without hardware dependencies
+unittest.mock.patch.dict('sys.modules', {
+    'pyaudiowpatch': unittest.mock.MagicMock(),
+    'lameenc': unittest.mock.MagicMock(),
+}).start()
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from main import MeetingRecorderApp, _compute_rms
 
@@ -17,11 +24,11 @@ class TestComputeEqualizeGain(unittest.TestCase):
 
     def test_mic_quieter_gets_boosted(self):
         sys_frames = [make_pcm(1000)] * 10
-        mic_frames = [make_pcm(250)] * 10
+        mic_frames = [make_pcm(500)] * 10  # ratio = 2.0, inside cap
         sys_gain, mic_gain = MeetingRecorderApp._compute_equalize_gain(
             sys_frames, mic_frames, filter_silence=False)
         self.assertEqual(sys_gain, 1.0)
-        self.assertAlmostEqual(mic_gain, 4.0, places=1)
+        self.assertAlmostEqual(mic_gain, 2.0, places=1)
 
     def test_sys_quieter_gets_boosted(self):
         sys_frames = [make_pcm(250)] * 10
