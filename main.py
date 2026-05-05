@@ -690,6 +690,7 @@ class MeetingRecorderApp:
 
                     # ---- 靜音偵測 ----
                     rms = _compute_rms(data)
+                    self.msg_queue.put(("vu_system", min(100.0, rms / 327.67)))
                     if rms < SILENCE_RMS_THRESHOLD:
                         if silence_start is None:
                             silence_start = time.time()
@@ -786,8 +787,10 @@ class MeetingRecorderApp:
                     data = stream.read(chunk, exception_on_overflow=False)
                     self.mic_frames.append(data)
 
+                    rms = _compute_rms(data)
+                    self.msg_queue.put(("vu_mic", min(100.0, rms / 327.67)))
+
                     if check_silence:
-                        rms = _compute_rms(data)
                         if rms < SILENCE_RMS_THRESHOLD:
                             if silence_start is None:
                                 silence_start = time.time()
