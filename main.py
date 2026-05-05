@@ -972,25 +972,58 @@ class MeetingRecorderApp:
                     return
 
                 if not self.mic_frames:
-                    # 麥克風無資料（開啟失敗或立即斷線），退回純系統音訊並警告
+                    # 麥克風無資料，退回純系統音訊
                     self.msg_queue.put(("warning", "麥克風無資料，改以「電腦聲音」模式儲存"))
-                    pcm_data    = b"".join(self.record_frames)
-                    channels    = self.record_channels
-                    sample_rate = self.record_sample_rate
-                else:
+                    mp3_data = self._encode_to_mp3(
+                        b"".join(self.record_frames),
+                        self.record_channels, self.record_sample_rate)
+                    filepath = self._save_file(mp3_data, base_name)
+                    self.msg_queue.put(("saved", [filepath]))
+                    return
+
+                output_mode = self._save_output_mode
+                saved_paths = []
+
+                # ---- 獨立音軌 ----
+                if output_mode in ("separate", "both"):
+                    sys_mp3 = self._encode_to_mp3(
+                        b"".join(self.record_frames),
+                        self.record_channels, self.record_sample_rate)
+                    mic_mp3 = self._encode_to_mp3(
+                        b"".join(self.mic_frames),
+                        self.record_mic_channels, self.record_mic_rate)
+                    saved_paths.append(self._save_file(sys_mp3, base_name, "_system"))
+                    saved_paths.append(self._save_file(mic_mp3, base_name, "_mic"))
+
+                # ---- 合併音軌 ----
+                if output_mode in ("merge", "both"):
                     if self.record_mic_rate != self.record_sample_rate:
-                        # 取樣率不一致，混音仍繼續但聲速會有輕微偏差
                         self.msg_queue.put(("warning",
                             f"麥克風取樣率（{self.record_mic_rate} Hz）與系統音訊"
                             f"（{self.record_sample_rate} Hz）不一致，麥克風聲音可能略有偏差"))
 
                     self.msg_queue.put(("status", "混音中..."))
-                    pcm_data = self._mix_pcm(
-                        b"".join(self.record_frames), self.record_channels,
-                        b"".join(self.mic_frames),    self.record_mic_channels,
-                    )
-                    channels    = self.record_channels
-                    sample_rate = self.record_sample_rate
+                    sys_pcm = b"".join(self.record_frames)
+                    mic_pcm = b"".join(self.mic_frames)
+
+                    if self._save_equalize:
+                        sys_gain, mic_gain = self._compute_equalize_gain(
+                            self.record_frames, self.mic_frames,
+                            filter_silence=self._save_filter_silence,
+                            gain_cap=self._save_gain_cap,
+                        )
+                        sys_pcm = self._apply_gain_to_pcm(sys_pcm, sys_gain)
+                        mic_pcm = self._apply_gain_to_pcm(mic_pcm, mic_gain)
+
+                    mixed_pcm = self._mix_pcm(
+                        sys_pcm, self.record_channels,
+                        mic_pcm, self.record_mic_channels)
+                    merged_mp3 = self._encode_to_mp3(
+                        mixed_pcm, self.record_channels, self.record_sample_rate)
+                    saved_paths.append(self._save_file(merged_mp3, base_name))
+
+                self.msg_queue.put(("saved", saved_paths))
+                return
 
             mp3_data = self._encode_to_mp3(pcm_data, channels, sample_rate)
             filepath = self._save_file(mp3_data, base_name)
