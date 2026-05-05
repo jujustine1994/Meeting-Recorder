@@ -914,7 +914,7 @@ class MeetingRecorderApp:
             with open(filepath, "wb") as f:
                 f.write(mp3_data)
 
-            self.msg_queue.put(("saved", filepath))
+            self.msg_queue.put(("saved", [filepath]))
 
         except Exception as e:
             self.msg_queue.put(("error", str(e)))
@@ -939,7 +939,7 @@ class MeetingRecorderApp:
         所有 UI 操作都在此（主執行緒）執行，背景執行緒只放訊息進 queue。
 
         訊息類型：
-          saved           — 儲存成功，data = filepath
+          saved           — 儲存成功，data = list[filepath]
           error           — 致命錯誤，data = 錯誤訊息
           warning         — 非致命警告，data = 警告訊息（顯示在 log，不中止流程）
           status          — 狀態文字更新，data = 狀態字串
@@ -950,10 +950,11 @@ class MeetingRecorderApp:
                 msg_type, data = self.msg_queue.get_nowait()
 
                 if msg_type == "saved":
-                    filename = os.path.basename(data)
-                    self._log(f"✓  {filename}")
+                    for fp in data:
+                        self._log(f"✓  {os.path.basename(fp)}")
+                    self.status_label.config(
+                        text=f"已儲存：{os.path.basename(data[-1])}", foreground="green")
                     self._reset_ui_after_stop()
-                    self.status_label.config(text=f"已儲存：{filename}", foreground="green")
 
                 elif msg_type == "error":
                     self._log(f"[ERROR] {data}")
