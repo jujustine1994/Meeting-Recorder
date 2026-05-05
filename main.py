@@ -835,7 +835,7 @@ class MeetingRecorderApp:
         encoder.set_bit_rate(128)
         encoder.set_in_sample_rate(sample_rate)
         encoder.set_channels(channels)
-        encoder.set_quality(2)
+        encoder.set_quality(2)  # 2=高品質，7=快速低品質
         return encoder.encode(pcm_data) + encoder.flush()
 
     def _save_file(self, mp3_data: bytes, base_name: str, suffix: str = "") -> str:
