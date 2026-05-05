@@ -981,6 +981,8 @@ class MeetingRecorderApp:
           warning         — 非致命警告，data = 警告訊息（顯示在 log，不中止流程）
           status          — 狀態文字更新，data = 狀態字串
           silence_warning — 靜音偵測，data = True（顯示）/ False（隱藏）
+          vu_system       — 系統音訊音量，data = float 0~100
+          vu_mic          — 麥克風音量，data = float 0~100
         """
         try:
             while True:
