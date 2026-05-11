@@ -23,6 +23,14 @@ import pyaudiowpatch as pyaudio
 import lameenc
 
 
+# ---- 可自行調整的進階參數（直接編輯此區段） ----
+_DEFAULT_BIT_RATE       = 128    # kbps：MP3 位元率預設值，可在進階設定中更改
+_MIX_WEIGHT_SYSTEM      = 0.6    # 系統音軌混音權重（兩軌混音時）
+_MIX_WEIGHT_MIC         = 0.6    # 麥克風混音權重
+_SILENCE_RMS_THRESHOLD  = 100    # 靜音判斷 RMS 閾值（Int16 0~32767）
+_SILENCE_WARNING_SECS   = 10     # 連續靜音幾秒後顯示警告
+
+
 # ---- CTH Banner（終端機用，launcher 視窗可見）----
 def show_cth_banner():
     b = "\033[90m"   # 邊框：深灰
@@ -866,8 +874,8 @@ class MeetingRecorderApp:
 
             # 靜音閾值：Int16 RMS < 100（範圍 0~32767）
             # 對應約 0.3% 最大音量，足以區分真實靜音與極低背景雜訊
-            SILENCE_RMS_THRESHOLD = 100
-            SILENCE_WARNING_SECS  = 10
+            SILENCE_RMS_THRESHOLD = _SILENCE_RMS_THRESHOLD
+            SILENCE_WARNING_SECS  = _SILENCE_WARNING_SECS
             silence_start  = None
             silence_warned = False
 
@@ -969,8 +977,8 @@ class MeetingRecorderApp:
             self._mic_stream = stream
 
             # 靜音閾值說明同 _record_worker
-            SILENCE_RMS_THRESHOLD = 100
-            SILENCE_WARNING_SECS  = 10
+            SILENCE_RMS_THRESHOLD = _SILENCE_RMS_THRESHOLD
+            SILENCE_WARNING_SECS  = _SILENCE_WARNING_SECS
             silence_start  = None
             silence_warned = False
 
@@ -1046,7 +1054,7 @@ class MeetingRecorderApp:
         length = min(len(sys_arr), len(mic_arr))
 
         mixed = array.array('h', [
-            max(-32768, min(32767, int(sys_arr[i] * 0.6 + mic_arr[i] * 0.6)))
+            max(-32768, min(32767, int(sys_arr[i] * _MIX_WEIGHT_SYSTEM + mic_arr[i] * _MIX_WEIGHT_MIC)))
             for i in range(length)
         ])
         return mixed.tobytes()
@@ -1063,7 +1071,7 @@ class MeetingRecorderApp:
         filter_silence=True 時排除 RMS < 100 的 chunk，避免靜音段影響平均。
         任一軌全靜音時回傳 (1.0, 1.0) 不等化。
         """
-        THRESHOLD = 100
+        THRESHOLD = _SILENCE_RMS_THRESHOLD
 
         def active_rms(frames):
             values = [_compute_rms(c) for c in frames]
