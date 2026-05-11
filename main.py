@@ -628,58 +628,71 @@ class MeetingRecorderApp:
         pad = {"padx": 14, "pady": 6}
 
         # 本地變數：pre-populate 目前設定，Cancel 不影響 app 狀態
-        output_var  = tk.StringVar(value=self.output_mode.get())
-        eq_var      = tk.BooleanVar(value=self.equalize_enabled.get())
-        cap_var     = tk.IntVar(value=self.eq_gain_cap.get())
-        filter_var  = tk.BooleanVar(value=self.eq_filter_silence.get())
+        br_var     = tk.IntVar(value=self.bit_rate.get())
+        eq_var     = tk.BooleanVar(value=self.equalize_enabled.get())
+        cap_var    = tk.IntVar(value=self.eq_gain_cap.get())
+        filter_var = tk.BooleanVar(value=self.eq_filter_silence.get())
 
-        # ---- 輸出方式 ----
-        frame_output = ttk.LabelFrame(
-            win, text=" 輸出方式（僅「系統＋麥克風」模式有效） ", padding=10)
-        frame_output.grid(row=0, column=0, sticky="ew", **pad)
-        for text, val in [("合併一軌", "merge"),
-                          ("獨立兩軌", "separate"),
-                          ("兩個都要", "both")]:
-            ttk.Radiobutton(frame_output, text=text,
-                            variable=output_var, value=val).pack(anchor="w")
+        # ---- 音質 ----
+        frame_quality = ttk.LabelFrame(win, text=" 音質 ", padding=10)
+        frame_quality.grid(row=0, column=0, sticky="ew", **pad)
+        for label, val in [("128 kbps（標準，一般會議適用）", 128),
+                            ("192 kbps（較好音質）",           192),
+                            ("320 kbps（最高，後製 / Podcast）", 320)]:
+            ttk.Radiobutton(frame_quality, text=label,
+                            variable=br_var, value=val).pack(anchor="w")
 
-        # ---- 自動等化 ----
-        frame_eq = ttk.LabelFrame(win, text=" 自動等化音量 ", padding=10)
-        frame_eq.grid(row=1, column=0, sticky="ew", **pad)
+        # ---- 混音設定 ----
+        frame_mix = ttk.LabelFrame(
+            win, text=" 混音設定（僅「系統＋麥克風」有效） ", padding=10)
+        frame_mix.grid(row=1, column=0, sticky="ew", **pad)
+
         ttk.Checkbutton(
-            frame_eq,
-            text="自動等化音量（讓麥克風與系統音訊響度接近）",
+            frame_mix,
+            text="自動等化音量（讓兩軌響度接近）",
             variable=eq_var,
         ).pack(anchor="w")
         ttk.Label(
-            frame_eq,
-            text="僅影響含混音的輸出；獨立音軌存原始音量",
+            frame_mix,
+            text="僅影響合併輸出；獨立音軌保留原始音量",
             foreground="gray", font=("", 8),
-        ).pack(anchor="w", pady=(2, 0))
+        ).pack(anchor="w", pady=(2, 8))
 
-        # ---- 等化進階設定 ----
-        frame_adv = ttk.LabelFrame(win, text=" 等化進階設定 ", padding=10)
-        frame_adv.grid(row=2, column=0, sticky="ew", **pad)
-        frame_adv.columnconfigure(2, weight=1)
+        # 等化子設定（eq 關閉時 gray out）
+        frame_eq_sub = tk.Frame(frame_mix)
+        frame_eq_sub.pack(fill="x")
+        frame_eq_sub.columnconfigure(2, weight=1)
 
-        ttk.Label(frame_adv, text="增益上限：").grid(row=0, column=0, sticky="w")
-        ttk.Spinbox(frame_adv, from_=1, to=16,
-                    textvariable=cap_var, width=5).grid(row=0, column=1, sticky="w", padx=(4, 0))
-        ttk.Label(frame_adv, text="x  (1～16)",
-                  foreground="gray").grid(row=0, column=2, sticky="w", padx=(4, 0))
-
-        ttk.Checkbutton(
-            frame_adv,
+        lbl_cap = ttk.Label(frame_eq_sub, text="增益上限：")
+        lbl_cap.grid(row=0, column=0, sticky="w")
+        spn_cap = ttk.Spinbox(frame_eq_sub, from_=1, to=16,
+                              textvariable=cap_var, width=5)
+        spn_cap.grid(row=0, column=1, sticky="w", padx=(4, 0))
+        lbl_x = ttk.Label(frame_eq_sub, text="x  (1～16)", foreground="gray")
+        lbl_x.grid(row=0, column=2, sticky="w", padx=(4, 0))
+        chk_filter = ttk.Checkbutton(
+            frame_eq_sub,
             text="靜音過濾：排除靜音段再計算 RMS",
             variable=filter_var,
-        ).grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        )
+        chk_filter.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        _eq_sub_widgets = [lbl_cap, spn_cap, lbl_x, chk_filter]
+
+        def _update_eq_state(*_):
+            state = "normal" if eq_var.get() else "disabled"
+            for w in _eq_sub_widgets:
+                w.config(state=state)
+
+        eq_var.trace_add("write", _update_eq_state)
+        _update_eq_state()  # 設定初始 gray-out 狀態
 
         # ---- 確認 / 取消 ----
         frame_btns = tk.Frame(win)
-        frame_btns.grid(row=3, column=0, pady=12)
+        frame_btns.grid(row=2, column=0, pady=12)
 
         def confirm():
-            self.output_mode.set(output_var.get())
+            self.bit_rate.set(br_var.get())
             self.equalize_enabled.set(eq_var.get())
             self.eq_gain_cap.set(max(1, min(16, cap_var.get())))
             self.eq_filter_silence.set(filter_var.get())
