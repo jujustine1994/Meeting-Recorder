@@ -191,6 +191,29 @@ class MeetingRecorderApp:
             command=self._show_mode_help,
         ).pack(side="right")
 
+        # 輸出格式：僅「系統 + 麥克風」時顯示
+        self._frame_output_inline = tk.Frame(frame_mode)
+        ttk.Label(
+            self._frame_output_inline, text="輸出格式：",
+            font=("", 9), foreground="#555555",
+        ).pack(side="left", padx=(0, 6))
+        self._output_radios = []
+        for text, val in [("合併一軌", "merge"), ("獨立兩軌", "separate"), ("兩個都要", "both")]:
+            rb = ttk.Radiobutton(
+                self._frame_output_inline, text=text,
+                variable=self.output_mode, value=val,
+            )
+            rb.pack(side="left", padx=(0, 12))
+            self._output_radios.append(rb)
+
+        def _on_mode_change(*_):
+            if self.record_mode.get() == "both":
+                self._frame_output_inline.pack(fill="x", pady=(8, 0))
+            else:
+                self._frame_output_inline.pack_forget()
+
+        self.record_mode.trace_add("write", _on_mode_change)
+
         # row=2  檔案名稱
         frame_name = ttk.LabelFrame(self.root, text=" 檔案名稱 ", padding=8)
         frame_name.grid(row=2, column=0, sticky="ew", **pad)
