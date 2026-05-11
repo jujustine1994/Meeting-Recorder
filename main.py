@@ -122,6 +122,7 @@ class MeetingRecorderApp:
         self._save_equalize: bool = False           # 等化開關快照
         self._save_gain_cap: float = 4.0            # 增益上限快照
         self._save_filter_silence: bool = True      # 靜音過濾快照
+        self._save_bit_rate: int = _DEFAULT_BIT_RATE   # 停止時從主執行緒鎖定
 
         # 裝置選擇（None = 系統預設）
         self.selected_input_idx:    int | None = None   # 麥克風裝置 index
@@ -142,6 +143,7 @@ class MeetingRecorderApp:
         self.equalize_enabled  = tk.BooleanVar(value=False)
         self.eq_gain_cap       = tk.IntVar(value=4)            # 倍數上限 1～16
         self.eq_filter_silence = tk.BooleanVar(value=True)
+        self.bit_rate          = tk.IntVar(value=_DEFAULT_BIT_RATE)
 
         # 錄音模式（UI 用，tk.StringVar 只在主執行緒存取）
         self.record_mode = tk.StringVar(value="system")
@@ -833,6 +835,7 @@ class MeetingRecorderApp:
         self._save_equalize       = self.equalize_enabled.get()
         self._save_gain_cap       = float(self.eq_gain_cap.get())
         self._save_filter_silence = self.eq_filter_silence.get()
+        self._save_bit_rate       = self.bit_rate.get()
 
         self.btn_record.config(state="disabled", text="儲存中...")
         self.status_label.config(text="轉換為 MP3 中...", foreground="gray")
@@ -1103,9 +1106,10 @@ class MeetingRecorderApp:
         return scaled.tobytes()
 
     # ---- 儲存輔助方法 ----
-    def _encode_to_mp3(self, pcm_data: bytes, channels: int, sample_rate: int) -> bytes:
+    def _encode_to_mp3(self, pcm_data: bytes, channels: int, sample_rate: int,
+                       bit_rate: int = _DEFAULT_BIT_RATE) -> bytes:
         encoder = lameenc.Encoder()
-        encoder.set_bit_rate(128)
+        encoder.set_bit_rate(bit_rate)
         encoder.set_in_sample_rate(sample_rate)
         encoder.set_channels(channels)
         encoder.set_quality(2)  # 2=高品質，7=快速低品質
@@ -1196,7 +1200,8 @@ class MeetingRecorderApp:
                     self.msg_queue.put(("warning", "麥克風無資料，改以「電腦聲音」模式儲存"))
                     mp3_data = self._encode_to_mp3(
                         b"".join(self.record_frames),
-                        self.record_channels, self.record_sample_rate)
+                        self.record_channels, self.record_sample_rate,
+                        bit_rate=self._save_bit_rate)
                     filepath = self._save_file(mp3_data, base_name)
                     self.msg_queue.put(("saved", [filepath]))
                     return
@@ -1210,10 +1215,12 @@ class MeetingRecorderApp:
                 if output_mode in ("separate", "both"):
                     sys_mp3 = self._encode_to_mp3(
                         b"".join(sys_frames_snap),
-                        self.record_channels, self.record_sample_rate)
+                        self.record_channels, self.record_sample_rate,
+                        bit_rate=self._save_bit_rate)
                     mic_mp3 = self._encode_to_mp3(
                         b"".join(mic_frames_snap),
-                        self.record_mic_channels, self.record_mic_rate)
+                        self.record_mic_channels, self.record_mic_rate,
+                        bit_rate=self._save_bit_rate)
                     saved_paths.append(self._save_file(sys_mp3, base_name, "_system"))
                     saved_paths.append(self._save_file(mic_mp3, base_name, "_mic"))
 
@@ -1241,7 +1248,8 @@ class MeetingRecorderApp:
                         sys_pcm, self.record_channels,
                         mic_pcm, self.record_mic_channels)
                     merged_mp3 = self._encode_to_mp3(
-                        mixed_pcm, self.record_channels, self.record_sample_rate)
+                        mixed_pcm, self.record_channels, self.record_sample_rate,
+                        bit_rate=self._save_bit_rate)
                     saved_paths.append(self._save_file(merged_mp3, base_name))
 
                 if not saved_paths:
@@ -1250,7 +1258,8 @@ class MeetingRecorderApp:
                 self.msg_queue.put(("saved", saved_paths))
                 return
 
-            mp3_data = self._encode_to_mp3(pcm_data, channels, sample_rate)
+            mp3_data = self._encode_to_mp3(pcm_data, channels, sample_rate,
+                                           bit_rate=self._save_bit_rate)
             filepath = self._save_file(mp3_data, base_name)
             self.msg_queue.put(("saved", [filepath]))
 
