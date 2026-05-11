@@ -17,7 +17,7 @@ import datetime
 import time
 import queue
 import tkinter as tk
-from tkinter import ttk, filedialog, scrolledtext
+from tkinter import ttk, filedialog, scrolledtext, messagebox
 
 import pyaudiowpatch as pyaudio
 import lameenc
@@ -102,9 +102,13 @@ class MeetingRecorderApp:
         self.record_mic_channels    = 1        # 麥克風固定 mono
         self.record_mic_rate        = 44100    # 麥克風實際使用的取樣率
         self.start_time: float = 0.0
+        self.is_paused: bool = False
+        self._elapsed_before_pause: float = 0.0  # 暫停前已累計的秒數
         self.msg_queue: queue.Queue = queue.Queue()
         self._record_thread: threading.Thread | None = None
         self._mic_thread:    threading.Thread | None = None
+        self._record_stream = None   # 供外部呼叫 stop_stream() 解除 read() 阻塞
+        self._mic_stream    = None
         self._save_mode: str = "system"        # 儲存時使用的模式，在停止時鎖定避免 race condition
         self._save_output_mode: str = "merge"      # 輸出方式快照（停止時從主執行緒鎖定）
         self._save_equalize: bool = False           # 等化開關快照
@@ -203,6 +207,21 @@ class MeetingRecorderApp:
             command=self._toggle_record, width=22
         )
         self.btn_record.pack(ipady=8)
+
+        # 第二列按鈕：錄音中才顯示
+        self._secondary_row = tk.Frame(frame_btn)
+
+        self.btn_pause = ttk.Button(
+            self._secondary_row, text="⏸  暫停",
+            command=self._pause_recording, width=12
+        )
+        self.btn_pause.pack(side="left", ipady=4)
+
+        self.btn_discard = ttk.Button(
+            self._secondary_row, text="🗑  停止不儲存",
+            command=self._discard_recording, width=14
+        )
+        self.btn_discard.pack(side="left", ipady=4, padx=(8, 0))
 
         self.timer_label = ttk.Label(
             frame_btn, text="00:00",
@@ -649,10 +668,102 @@ class MeetingRecorderApp:
             self.save_folder_var.set(folder)
 
     def _toggle_record(self):
-        if not self.is_recording:
-            self._start_recording()
-        else:
+        if self.is_recording or self.is_paused:
             self._stop_recording()
+        else:
+            self._start_recording()
+
+    def _pause_recording(self):
+        self.is_recording = False
+        self.is_paused = True
+        self._elapsed_before_pause += time.time() - self.start_time
+
+        self.btn_record.config(state="disabled")
+        self.btn_pause.config(state="disabled")
+        self.btn_discard.config(state="disabled")
+        self.status_label.config(text="暫停中...", foreground="gray")
+        self.timer_label.config(foreground="#FF8C00")
+
+        threading.Thread(target=self._wait_for_pause, daemon=True).start()
+
+    def _wait_for_pause(self):
+        """背景：等錄音執行緒結束，釋放 PyAudio，再通知 UI 進入已暫停狀態"""
+        self._force_stop_streams()
+        if self._record_thread:
+            self._record_thread.join(timeout=5)
+        if self._mic_thread:
+            self._mic_thread.join(timeout=5)
+        if not (self._record_thread and self._record_thread.is_alive()) and \
+           not (self._mic_thread    and self._mic_thread.is_alive()):
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+        self.msg_queue.put(("paused", None))
+
+    def _resume_recording(self):
+        self.is_paused = False
+        self.is_recording = True
+        self.start_time = time.time()
+        mode = self.record_mode.get()
+
+        self._pa = pyaudio.PyAudio()
+
+        self.btn_record.config(text="⏹  停止並儲存", state="normal")
+        self.btn_pause.config(text="⏸  暫停", command=self._pause_recording, state="normal")
+        self.btn_discard.config(state="normal")
+        self.status_label.config(text="錄音中...", foreground="red")
+        self.timer_label.config(foreground="red")
+
+        self._update_timer()
+
+        if mode in ("system", "both"):
+            self._record_thread = threading.Thread(
+                target=self._record_worker, args=(self._pa,), daemon=True)
+            self._record_thread.start()
+
+        if mode in ("mic", "both"):
+            self._mic_thread = threading.Thread(
+                target=self._record_mic_worker,
+                args=(self._pa, mode == "mic"),
+                daemon=True,
+            )
+            self._mic_thread.start()
+
+    def _discard_recording(self):
+        confirmed = messagebox.askyesno(
+            "確認停止不儲存",
+            "確定要停止錄音並捨棄所有資料？\n此操作無法復原。",
+            icon="warning",
+            parent=self.root,
+        )
+        if not confirmed:
+            return
+        self.is_recording = False
+        self.is_paused = False
+        self.btn_record.config(state="disabled", text="停止中...")
+        self.btn_pause.config(state="disabled")
+        self.btn_discard.config(state="disabled")
+        self.status_label.config(text="停止中...", foreground="gray")
+        self.timer_label.config(foreground="gray")
+        self.filename_entry.config(state="normal")
+        threading.Thread(target=self._cleanup_after_discard, daemon=True).start()
+
+    def _cleanup_after_discard(self):
+        self._force_stop_streams()
+        if self._record_thread:
+            self._record_thread.join(timeout=5)
+        if self._mic_thread:
+            self._mic_thread.join(timeout=5)
+        if not (self._record_thread and self._record_thread.is_alive()) and \
+           not (self._mic_thread    and self._mic_thread.is_alive()):
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+        self.record_frames = []
+        self.mic_frames = []
+        self.msg_queue.put(("discarded", None))
 
     def _set_mode_radios_state(self, state: str):
         for rb in self._mode_radios:
@@ -660,15 +771,20 @@ class MeetingRecorderApp:
 
     def _start_recording(self):
         self.is_recording  = True
+        self.is_paused     = False
         self.record_frames = []
         self.mic_frames    = []
         self.start_time    = time.time()
+        self._elapsed_before_pause = 0.0
         mode = self.record_mode.get()
 
         # 共用一個 PyAudio 實例，避免兩個執行緒各自 Pa_Initialize() 造成 C 層 assert crash
         self._pa = pyaudio.PyAudio()
 
         self.btn_record.config(text="⏹  停止並儲存")
+        self.btn_pause.config(text="⏸  暫停", command=self._pause_recording, state="normal")
+        self.btn_discard.config(state="normal")
+        self._secondary_row.pack(pady=(8, 0))
         self.status_label.config(text="錄音中...", foreground="red")
         self.timer_label.config(foreground="red")
         self.filename_entry.config(state="disabled")
@@ -694,7 +810,7 @@ class MeetingRecorderApp:
     def _update_timer(self):
         """每秒更新計時器（root.after 確保在主執行緒執行）"""
         if self.is_recording:
-            elapsed = int(time.time() - self.start_time)
+            elapsed = int(self._elapsed_before_pause + time.time() - self.start_time)
             mins = elapsed // 60
             secs = elapsed % 60
             self.timer_label.config(text=f"{mins:02d}:{secs:02d}")
@@ -746,6 +862,7 @@ class MeetingRecorderApp:
                 return s, ch, sr
 
             stream, self.record_channels, self.record_sample_rate = open_stream()
+            self._record_stream = stream
 
             # 靜音閾值：Int16 RMS < 100（範圍 0~32767）
             # 對應約 0.3% 最大音量，足以區分真實靜音與極低背景雜訊
@@ -789,6 +906,7 @@ class MeetingRecorderApp:
                             channels=self.record_channels,
                             sample_rate=self.record_sample_rate,
                         )
+                        self._record_stream = stream
                     except Exception:
                         time.sleep(1)  # 裝置仍不可用，避免 busy-wait 佔滿 CPU
                         continue
@@ -798,6 +916,7 @@ class MeetingRecorderApp:
                 stream.close()
             except Exception:
                 pass
+            self._record_stream = None
 
         except Exception as e:
             self.msg_queue.put(("error", str(e)))
@@ -847,6 +966,8 @@ class MeetingRecorderApp:
                 self.record_mic_channels = 1
                 self.record_mic_rate     = fallback
 
+            self._mic_stream = stream
+
             # 靜音閾值說明同 _record_worker
             SILENCE_RMS_THRESHOLD = 100
             SILENCE_WARNING_SECS  = 10
@@ -882,6 +1003,7 @@ class MeetingRecorderApp:
                 stream.close()
             except Exception:
                 pass
+            self._mic_stream = None
 
         except Exception as e:
             # Mode "both"：麥克風失敗不中止程式，但通知使用者
@@ -992,22 +1114,45 @@ class MeetingRecorderApp:
             f.write(mp3_data)
         return filepath
 
+    def _force_stop_streams(self):
+        """
+        從外部強制停止活躍的音訊串流。
+
+        stream.read() 在 WASAPI 裝置停止派發 chunk 時會無限阻塞，
+        導致 join(timeout) 超時後 pa.terminate() 在 thread 仍活著時被呼叫，
+        引發 C 層 crash（閃退）。呼叫 stop_stream() 可喚醒阻塞中的 read()
+        讓 thread 收到 OSError 後自行退出。
+        """
+        for attr in ("_record_stream", "_mic_stream"):
+            s = getattr(self, attr, None)
+            if s is not None:
+                try:
+                    s.stop_stream()
+                except Exception:
+                    pass
+
     # ---- 儲存執行緒 ----
     def _save_after_stop(self):
         """
         等待所有錄音執行緒結束後，轉換並儲存 MP3。
-        join timeout=3s：足以涵蓋最壞情況（OSError recovery 的 0.5s sleep + 重開 stream）。
+        先 force-stop streams 讓 read() 阻塞解除，確保 join 能在 timeout 內完成。
         """
+        self._force_stop_streams()
         if self._record_thread:
-            self._record_thread.join(timeout=3)
+            self._record_thread.join(timeout=5)
         if self._mic_thread:
-            self._mic_thread.join(timeout=3)
+            self._mic_thread.join(timeout=5)
 
-        # 所有 stream 已關閉，統一釋放共用 PyAudio 實例
-        try:
-            self._pa.terminate()
-        except Exception:
-            pass
+        # 只在 thread 確實結束後才 terminate，避免殘留 thread 持有 handle
+        record_alive = self._record_thread and self._record_thread.is_alive()
+        mic_alive    = self._mic_thread    and self._mic_thread.is_alive()
+        if not record_alive and not mic_alive:
+            try:
+                self._pa.terminate()
+            except Exception:
+                pass
+        else:
+            self.msg_queue.put(("warning", "錄音執行緒未正常結束，PyAudio 資源暫時保留（重啟程式可釋放）"))
 
         try:
             mode = self._save_mode  # 已在主執行緒鎖定，不從 tkinter StringVar 讀取
@@ -1113,7 +1258,12 @@ class MeetingRecorderApp:
 
     def _reset_ui_after_stop(self):
         """錄音與儲存流程完全結束後，還原所有 UI 元件狀態"""
+        self.is_paused = False
+        self._elapsed_before_pause = 0.0
         self.btn_record.config(state="normal", text="⏺  開始錄音")
+        self.btn_pause.config(text="⏸  暫停", command=self._pause_recording, state="normal")
+        self.btn_discard.config(state="normal")
+        self._secondary_row.pack_forget()
         self.timer_label.config(text="00:00", foreground="gray")
         self.silence_banner.grid_remove()
         self._set_mode_radios_state("normal")
@@ -1135,6 +1285,7 @@ class MeetingRecorderApp:
           silence_warning — 靜音偵測，data = True（顯示）/ False（隱藏）
           vu_system       — 系統音訊音量，data = float 0~100
           vu_mic          — 麥克風音量，data = float 0~100
+          paused          — 暫停完成，data = None
         """
         try:
             while True:
@@ -1166,6 +1317,18 @@ class MeetingRecorderApp:
                     val = max(0.0, min(100.0, float(data)))
                     self.vu_mic_var.set(val)
                     self.vu_mic_pct.config(text=f"{int(val):3d}%")
+
+                elif msg_type == "paused":
+                    self.btn_record.config(state="normal")
+                    self.btn_pause.config(text="▶  繼續錄音",
+                                          command=self._resume_recording, state="normal")
+                    self.btn_discard.config(state="normal")
+                    self.status_label.config(text="已暫停", foreground="#FF8C00")
+
+                elif msg_type == "discarded":
+                    self._log("✗  錄音已捨棄（未儲存）")
+                    self._reset_ui_after_stop()
+                    self.status_label.config(text="錄音已捨棄", foreground="gray")
 
                 elif msg_type == "status":
                     self.status_label.config(text=data, foreground="gray")

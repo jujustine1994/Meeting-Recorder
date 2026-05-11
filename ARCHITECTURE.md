@@ -3,7 +3,7 @@
 ## 工具總覽
 
 錄製 Windows 系統音訊（WASAPI Loopback），儲存為 MP3。
-tkinter GUI 視窗，按鈕開始 / 結束，支援連續錄多段、自訂檔名。
+tkinter GUI 視窗，支援開始 / 暫停 / 繼續 / 停止，可選擇停止後儲存或捨棄，支援連續錄多段、自訂檔名。
 
 ## 檔案清單
 
@@ -30,13 +30,14 @@ tkinter GUI 視窗，按鈕開始 / 結束，支援連續錄多段、自訂檔�
             ├── [3/3] 檢查 venv（沒有就建立並安裝套件）
             └── python main.py
                     ├── cls + CTH Banner
-                    ├── tkinter 選擇儲存資料夾
-                    └── 錄音迴圈
-                            ├── Enter → 開始錄音（背景執行緒）
-                            ├── 計時器顯示（背景執行緒）
-                            ├── Enter → 停止錄音
-                            ├── lameenc 轉 MP3
-                            ├── 儲存 meeting_YYYY-MM-DD_HH-MM-SS.mp3
+                    └── tkinter 主視窗
+                            ├── 選擇儲存位置 / 錄音模式 / 檔名
+                            ├── 按「開始錄音」→ loopback + mic 背景執行緒
+                            ├── VU Meter 即時更新、計時器每秒更新
+                            ├── 按「暫停」→ stop_stream() 喚醒 thread → pa.terminate() → 保留資料
+                            ├── 按「繼續錄音」→ 新 PyAudio + 新執行緒，資料接續累加
+                            ├── 按「停止並儲存」→ force_stop → join → pa.terminate() → lameenc → 存 MP3
+                            ├── 按「停止不儲存」→ 確認彈窗 → force_stop → join → 丟棄資料
                             └── 回到等待下一段
 ```
 
@@ -74,3 +75,6 @@ WASAPI Loopback 的「靜音是否影響錄音」取決於音效卡驅動的截�
 | `chunk` | `_record_worker()` | 每次讀取的音訊幀數，預設 512 |
 | `bit_rate` | `_save_after_stop()` | MP3 位元率，預設 128 kbps |
 | `quality` | `_save_after_stop()` | lameenc 編碼品質，2=高品質 |
+| `_record_stream` | `__init__` | 活躍的 loopback stream 參照，供 `_force_stop_streams()` 解除 read() 阻塞 |
+| `_mic_stream` | `__init__` | 活躍的 mic stream 參照，同上 |
+| `_elapsed_before_pause` | `__init__` | 暫停前已累計秒數，resume 後計時器從此繼續 |
