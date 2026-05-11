@@ -78,3 +78,7 @@ WASAPI Loopback 的「靜音是否影響錄音」取決於音效卡驅動的截�
 | `_record_stream` | `__init__` | 活躍的 loopback stream 參照，供 `_force_stop_streams()` 解除 read() 阻塞 |
 | `_mic_stream` | `__init__` | 活躍的 mic stream 參照，同上 |
 | `_elapsed_before_pause` | `__init__` | 暫停前已累計秒數，resume 後計時器從此繼續 |
+| `_DEFAULT_BIT_RATE` | 模組頂部 | MP3 位元率預設值，可在進階設定中更改 |
+| `_MIX_WEIGHT_SYSTEM / _MIX_WEIGHT_MIC` | 模組頂部 | 混音權重，進階使用者直接改此常數 |
+| `_SILENCE_RMS_THRESHOLD` | 模組頂部 | 靜音閾值，影響警告橫幅與等化計算 |
+| `_SILENCE_WARNING_SECS` | 模組頂部 | 靜音警告倒計時 |
