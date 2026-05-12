@@ -26,3 +26,20 @@
 - 不可在 `join(timeout)` 超時後直接呼叫 `pa.terminate()`  
 - 不可移除 `_force_stop_streams()` 呼叫（即使「正常情況」執行時用不到）  
 - 不可把 join timeout 設得過短（目前 5s，已考慮裝置切換的 0.5s + 1s sleep）
+
+---
+
+## Pitfall 2：Discord（及 Teams/Zoom）透過 WASAPI 啟用音訊增強 → 麥克風錄音破音
+
+**問題**  
+與 Discord 同時錄音時，`_mic.mp3` 聲音失真（AGC pumping、類機器人聲），但通話本身聲音正常，且用 Audacity 單獨測試麥克風也正常。
+
+**原因**  
+Discord 在 WASAPI 層對麥克風裝置啟用 Windows 音訊增強（AGC 自動增益、降噪、回音消除）。這些增強套用於整個 WASAPI shared mode session，所有透過 WASAPI 存取同一麥克風的應用程式（包括本程式）都會收到已處理的失真訊號，而非原始硬體音訊。
+
+**解法**  
+麥克風改用 **MME host API** 開啟（`_find_mme_mic_device()`），MME 直接存取硬體，完全繞過 WASAPI 層的音訊增強。`_record_mic_worker` 已改為呼叫此 helper 取得 MME 裝置 index。
+
+**禁止**  
+- 不可把麥克風 stream 改回用 `self.selected_input_idx`（WASAPI index）直接開啟  
+- `_find_mme_mic_device()` 的 fallback 鏈（找不到對應 MME 裝置 → MME 預設 → 原 WASAPI index）必須保留，否則找不到 MME 時會 crash

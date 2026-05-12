@@ -969,6 +969,49 @@ class MeetingRecorderApp:
         except Exception as e:
             self.msg_queue.put(("error", str(e)))
 
+    # ---- MME 裝置查找 ----
+    def _find_mme_mic_device(self, p: pyaudio.PyAudio) -> int | None:
+        """
+        回傳 MME host API 下對應的麥克風裝置 index。
+
+        使用 MME 而非 WASAPI 開啟麥克風，可繞過 Windows 在 WASAPI 層套用的
+        音訊增強（AGC、降噪、回音消除）。Discord 等通話軟體會在 WASAPI 層
+        啟用這些增強，導致同時錄音時訊號失真。MME 直接存取原始硬體音訊，
+        不受影響。
+
+        比對邏輯：MME 裝置名稱通常是 WASAPI 名稱截斷至前 31 個字元，
+        以 WASAPI 名稱開頭比對 MME 名稱。
+        找不到對應裝置時 fallback 到 MME 預設輸入。
+        """
+        try:
+            mme_info    = p.get_host_api_info_by_type(pyaudio.paMME)
+            mme_api_idx = mme_info["index"]
+        except Exception:
+            return self.selected_input_idx  # MME 不可用，沿用原裝置
+
+        if self.selected_input_idx is None:
+            default_idx = mme_info.get("defaultInputDevice", -1)
+            return default_idx if default_idx >= 0 else None
+
+        try:
+            wasapi_name = p.get_device_info_by_index(self.selected_input_idx)["name"]
+        except Exception:
+            default_idx = mme_info.get("defaultInputDevice", -1)
+            return default_idx if default_idx >= 0 else None
+
+        for i in range(p.get_device_count()):
+            try:
+                dev = p.get_device_info_by_index(i)
+                if (dev["hostApi"] == mme_api_idx
+                        and dev["maxInputChannels"] > 0
+                        and wasapi_name.startswith(dev["name"])):
+                    return i
+            except Exception:
+                continue
+
+        default_idx = mme_info.get("defaultInputDevice", -1)
+        return default_idx if default_idx >= 0 else None
+
     # ---- 錄音執行緒：麥克風 ----
     def _record_mic_worker(self, p: pyaudio.PyAudio, check_silence: bool = False):
         """
@@ -981,10 +1024,13 @@ class MeetingRecorderApp:
         取樣率盡量對齊 self.record_sample_rate（loopback 的 rate），
         方便後續混音。若麥克風不支援，fallback 到麥克風原生 rate 並記錄，
         混音時會顯示警告（兩個 rate 不一致會造成輕微音速偏差）。
+
+        裝置選擇使用 MME 而非 WASAPI，見 _find_mme_mic_device。
         """
         try:
-            chunk = 512
+            chunk      = 512
             target_rate = self.record_sample_rate  # 對齊 loopback rate
+            mme_idx    = self._find_mme_mic_device(p)
 
             try:
                 stream = p.open(
@@ -993,14 +1039,14 @@ class MeetingRecorderApp:
                     rate=target_rate,
                     frames_per_buffer=chunk,
                     input=True,
-                    input_device_index=self.selected_input_idx,
+                    input_device_index=mme_idx,
                 )
                 self.record_mic_channels = 1
                 self.record_mic_rate     = target_rate
             except Exception:
                 # 麥克風不支援目標 rate，退回麥克風原生 rate
-                dev_info = (p.get_device_info_by_index(self.selected_input_idx)
-                            if self.selected_input_idx is not None
+                dev_info = (p.get_device_info_by_index(mme_idx)
+                            if mme_idx is not None
                             else p.get_default_input_device_info())
                 fallback = int(dev_info["defaultSampleRate"])
                 stream = p.open(
@@ -1009,7 +1055,7 @@ class MeetingRecorderApp:
                     rate=fallback,
                     frames_per_buffer=chunk,
                     input=True,
-                    input_device_index=self.selected_input_idx,
+                    input_device_index=mme_idx,
                 )
                 self.record_mic_channels = 1
                 self.record_mic_rate     = fallback

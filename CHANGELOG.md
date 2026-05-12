@@ -32,6 +32,13 @@
 
 ## 更新記錄
 
+### 2026-05-13 — 麥克風改用 MME 繞過 Discord 音訊增強干擾
+
+- 修復：與 Discord（及 Teams、Zoom）同時錄音時，麥克風音訊失真（AGC pumping、類機器人聲）
+  - 根因：Discord 在 WASAPI 層對麥克風裝置啟用 Windows 音訊增強（AGC、降噪、回音消除），影響所有 WASAPI shared mode 客戶端
+  - 解法：新增 `_find_mme_mic_device()` 將麥克風切換為 MME host API 開啟，繞過 WASAPI 層增強；含 WASAPI→MME 名稱比對、三層 fallback
+- 新增：PITFALLS.md Pitfall 2 — Discord 音訊增強干擾麥克風錄音
+
 ### 2026-05-11 — 進階設定重構、主畫面輸出格式、config 常數
 
 - 新增：主畫面「系統＋麥克風」模式下動態顯示輸出格式選項（合併 / 獨立 / 兩個都要）
