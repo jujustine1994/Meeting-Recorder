@@ -288,6 +288,8 @@ class MeetingRecorderApp:
         self.vu_mic_pct = ttk.Label(vu_frame, text="  0%", width=5,
                                      foreground="gray", font=("Consolas", 9))
         self.vu_mic_pct.grid(row=1, column=2, padx=(4, 0), pady=(4, 0))
+        self.mic_offline_label = ttk.Label(vu_frame, text="", foreground="red", font=("", 9))
+        self.mic_offline_label.grid(row=1, column=3, padx=(6, 0), pady=(4, 0))
 
         # 裝置設定 + 進階設定 雙按鈕列
         btn_row = tk.Frame(frame_btn)
@@ -1117,10 +1119,45 @@ class MeetingRecorderApp:
                                 silence_warned = False
 
                 except OSError:
+                    try:
+                        stream.stop_stream()
+                        stream.close()
+                    except Exception:
+                        pass
+                    self._mic_stream = None
                     self.msg_queue.put(("vu_mic", 0.0))
-                    level = "warning" if self._save_mode == "both" else "error"
-                    self.msg_queue.put((level, "麥克風裝置連線中斷，麥克風錄音已停止"))
-                    break
+                    self.msg_queue.put(("mic_offline", True))
+                    self.msg_queue.put(("warning", "麥克風裝置中斷，嘗試重新連線（最多等 30 秒）..."))
+
+                    recovered = False
+                    for _ in range(30):
+                        time.sleep(1)
+                        if not self.is_recording:
+                            break
+                        try:
+                            new_stream = p.open(
+                                format=pyaudio.paInt16,
+                                channels=1,
+                                rate=self.record_mic_rate,
+                                frames_per_buffer=chunk,
+                                input=True,
+                                input_device_index=mme_idx,
+                            )
+                            stream = new_stream
+                            self._mic_stream = stream
+                            recovered = True
+                            self.msg_queue.put(("mic_offline", False))
+                            self.msg_queue.put(("warning", "麥克風裝置已重新連線，錄音繼續"))
+                            break
+                        except Exception:
+                            continue
+
+                    if not recovered:
+                        if self.is_recording:
+                            level = "warning" if self._save_mode == "both" else "error"
+                            self.msg_queue.put((level,
+                                "麥克風裝置無法恢復（逾時 30 秒），麥克風錄音已停止"))
+                        break
 
             try:
                 stream.stop_stream()
@@ -1468,6 +1505,7 @@ class MeetingRecorderApp:
         self.vu_mic_var.set(0)
         self.vu_system_pct.config(text=f"{0:3d}%")
         self.vu_mic_pct.config(text=f"{0:3d}%")
+        self.mic_offline_label.config(text="")
 
     def _poll_queue(self):
         """
@@ -1487,6 +1525,7 @@ class MeetingRecorderApp:
           progress        — MP3 編碼進度，data = 字串（覆寫 log 最後一行）
           progress_done   — 編碼階段完成，data = 字串（覆寫最後一行後永久保留）
           device_failed   — 系統音訊裝置不可恢復，自動觸發儲存流程
+          mic_offline     — 麥克風離線警示，data = True（顯示）/ False（清除）
         """
         try:
             while True:
@@ -1530,7 +1569,11 @@ class MeetingRecorderApp:
                     self.vu_mic_var.set(val)
                     self.vu_mic_pct.config(text=f"{int(val):3d}%")
 
+                elif msg_type == "mic_offline":
+                    self.mic_offline_label.config(text="⚠ 麥克風斷線" if data else "")
+
                 elif msg_type == "paused":
+                    self.mic_offline_label.config(text="")
                     self.btn_record.config(state="normal")
                     self.btn_pause.config(text="▶  繼續錄音",
                                           command=self._resume_recording, state="normal")
