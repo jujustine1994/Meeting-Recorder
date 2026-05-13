@@ -1333,26 +1333,37 @@ class MeetingRecorderApp:
                     mp3_data = self._encode_to_mp3(
                         b"".join(self.record_frames),
                         self.record_channels, self.record_sample_rate,
-                        bit_rate=self._save_bit_rate)
+                        bit_rate=self._save_bit_rate,
+                        progress_cb=self._make_progress_cb("音訊", 1, 1))
+                    self.msg_queue.put(("progress_done", "✓ 編碼完成"))
                     filepath = self._save_file(mp3_data, base_name)
                     self.msg_queue.put(("saved", [filepath]))
                     return
 
                 output_mode = self._save_output_mode
+                total_enc = (2 if output_mode in ("separate", "both") else 0) + \
+                            (1 if output_mode in ("merge", "both") else 0)
+                enc_idx = 0
                 saved_paths = []
                 sys_frames_snap = list(self.record_frames)
                 mic_frames_snap = list(self.mic_frames)
 
                 # ---- 獨立音軌 ----
                 if output_mode in ("separate", "both"):
+                    enc_idx += 1
                     sys_mp3 = self._encode_to_mp3(
                         b"".join(sys_frames_snap),
                         self.record_channels, self.record_sample_rate,
-                        bit_rate=self._save_bit_rate)
+                        bit_rate=self._save_bit_rate,
+                        progress_cb=self._make_progress_cb("system", enc_idx, total_enc))
+                    self.msg_queue.put(("progress_done", "✓ system 編碼完成"))
+                    enc_idx += 1
                     mic_mp3 = self._encode_to_mp3(
                         b"".join(mic_frames_snap),
                         self.record_mic_channels, self.record_mic_rate,
-                        bit_rate=self._save_bit_rate)
+                        bit_rate=self._save_bit_rate,
+                        progress_cb=self._make_progress_cb("mic", enc_idx, total_enc))
+                    self.msg_queue.put(("progress_done", "✓ mic 編碼完成"))
                     saved_paths.append(self._save_file(sys_mp3, base_name, "_system"))
                     saved_paths.append(self._save_file(mic_mp3, base_name, "_mic"))
 
@@ -1379,9 +1390,12 @@ class MeetingRecorderApp:
                     mixed_pcm = self._mix_pcm(
                         sys_pcm, self.record_channels,
                         mic_pcm, self.record_mic_channels)
+                    enc_idx += 1
                     merged_mp3 = self._encode_to_mp3(
                         mixed_pcm, self.record_channels, self.record_sample_rate,
-                        bit_rate=self._save_bit_rate)
+                        bit_rate=self._save_bit_rate,
+                        progress_cb=self._make_progress_cb("合併音訊", enc_idx, total_enc))
+                    self.msg_queue.put(("progress_done", "✓ 合併音訊編碼完成"))
                     saved_paths.append(self._save_file(merged_mp3, base_name))
 
                 if not saved_paths:
@@ -1391,7 +1405,9 @@ class MeetingRecorderApp:
                 return
 
             mp3_data = self._encode_to_mp3(pcm_data, channels, sample_rate,
-                                           bit_rate=self._save_bit_rate)
+                                           bit_rate=self._save_bit_rate,
+                                           progress_cb=self._make_progress_cb("音訊", 1, 1))
+            self.msg_queue.put(("progress_done", "✓ 編碼完成"))
             filepath = self._save_file(mp3_data, base_name)
             self.msg_queue.put(("saved", [filepath]))
 
