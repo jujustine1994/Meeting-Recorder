@@ -1280,6 +1280,14 @@ class MeetingRecorderApp:
         """
         等待所有錄音執行緒結束後，轉換並儲存 MP3。
         先 force-stop streams 讓 read() 阻塞解除，確保 join 能在 timeout 內完成。
+
+        Code path 依 mode × output_mode 分為五條：
+          system                        → 單一 encode → 存檔
+          mic                           → 單一 encode → 存檔
+          both，mic 無資料               → fallback 到 system 模式，單一 encode → 存檔
+          both，output_mode=separate    → encode sys + encode mic → 存兩檔
+          both，output_mode=merge       → 混音 → encode merged → 存一檔
+          both，output_mode=both        → encode sys + encode mic + 混音 → encode merged → 存三檔
         """
         self._force_stop_streams()
         if self._record_thread:
@@ -1345,6 +1353,7 @@ class MeetingRecorderApp:
                             (1 if output_mode in ("merge", "both") else 0)
                 enc_idx = 0
                 saved_paths = []
+                # snapshot 複製，避免 encode 途中主執行緒的 discard 操作清空 list
                 sys_frames_snap = list(self.record_frames)
                 mic_frames_snap = list(self.mic_frames)
 
@@ -1470,6 +1479,9 @@ class MeetingRecorderApp:
           vu_system       — 系統音訊音量，data = float 0~100
           vu_mic          — 麥克風音量，data = float 0~100
           paused          — 暫停完成，data = None
+          discarded       — 錄音已捨棄，data = None
+          progress        — MP3 編碼進度，data = 字串（覆寫 log 最後一行）
+          progress_done   — 編碼階段完成，data = 字串（覆寫最後一行後永久保留）
         """
         try:
             while True:
