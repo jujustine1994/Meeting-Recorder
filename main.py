@@ -1221,13 +1221,31 @@ class MeetingRecorderApp:
 
     # ---- 儲存輔助方法 ----
     def _encode_to_mp3(self, pcm_data: bytes, channels: int, sample_rate: int,
-                       bit_rate: int = _DEFAULT_BIT_RATE) -> bytes:
+                       bit_rate: int = _DEFAULT_BIT_RATE,
+                       progress_cb=None) -> bytes:
         encoder = lameenc.Encoder()
         encoder.set_bit_rate(bit_rate)
         encoder.set_in_sample_rate(sample_rate)
         encoder.set_channels(channels)
-        encoder.set_quality(2)  # 2=高品質，7=快速低品質
-        return encoder.encode(pcm_data) + encoder.flush()
+        encoder.set_quality(2)
+
+        if progress_cb is None or len(pcm_data) == 0:
+            return encoder.encode(pcm_data) + encoder.flush()
+
+        # 切 20 段，對齊 frame 邊界（channels × 2 bytes）
+        frame_size = channels * 2
+        total = len(pcm_data)
+        chunk_size = max((total // 20 // frame_size) * frame_size, frame_size)
+
+        result = b""
+        offset = 0
+        while offset < total:
+            chunk = pcm_data[offset:offset + chunk_size]
+            result += encoder.encode(chunk)
+            offset += len(chunk)
+            progress_cb(min(100, int(offset / total * 100)))
+
+        return result + encoder.flush()
 
     def _save_file(self, mp3_data: bytes, base_name: str, suffix: str = "") -> str:
         name = base_name + suffix
