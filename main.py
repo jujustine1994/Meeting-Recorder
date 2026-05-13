@@ -113,6 +113,7 @@ class MeetingRecorderApp:
         self.is_paused: bool = False
         self._elapsed_before_pause: float = 0.0  # 暫停前已累計的秒數
         self.msg_queue: queue.Queue = queue.Queue()
+        self._progress_line_active: bool = False  # log 最後一行是否為可覆寫的進度行
         self._record_thread: threading.Thread | None = None
         self._mic_thread:    threading.Thread | None = None
         self._record_stream = None   # 供外部呼叫 stop_stream() 解除 read() 阻塞
@@ -455,17 +456,20 @@ class MeetingRecorderApp:
 
             finally 中的 win.after(0, ...) 用來將 UI 還原操作排回主執行緒執行，
             外層 try/except 防止視窗已關閉時 after() 拋出 TclError。
+
+            使用 MME 開啟麥克風（同 _record_mic_worker），確保測試結果與實際錄音一致。
             """
             p = pyaudio.PyAudio()
             try:
-                # 使用裝置原生取樣率，避免部分麥克風不支援 44100 Hz 而報錯
-                dev_info = (p.get_device_info_by_index(device_idx)
-                            if device_idx is not None
+                # 用 MME 繞過 Discord 等在 WASAPI 層套用的音訊增強（見 PITFALLS.md Pitfall 2）
+                mme_idx = self._find_mme_mic_device(p, device_idx)
+                dev_info = (p.get_device_info_by_index(mme_idx)
+                            if mme_idx is not None
                             else p.get_default_input_device_info())
                 sample_rate = int(dev_info["defaultSampleRate"])
                 stream = p.open(format=pyaudio.paInt16, channels=1, rate=sample_rate,
                                 frames_per_buffer=512, input=True,
-                                input_device_index=device_idx)
+                                input_device_index=mme_idx)
                 while mic_running[0]:
                     data = stream.read(512, exception_on_overflow=False)
                     rms  = _compute_rms(data)
@@ -940,24 +944,39 @@ class MeetingRecorderApp:
                             silence_warned = False
 
                 except OSError:
-                    # 插拔耳機 / 切換播放裝置導致 stream 失效，重新取得新裝置
+                    # 插拔耳機 / 切換播放裝置 / 睡眠喚醒後音訊 session 重置導致 stream 失效
                     try:
                         stream.stop_stream()
                         stream.close()
                     except Exception:
                         pass
-                    time.sleep(0.5)  # 等 Windows 完成裝置切換
-                    if not self.is_recording:
+                    self._record_stream = None
+                    self.msg_queue.put(("vu_system", 0.0))
+                    self.msg_queue.put(("warning", "系統音訊裝置中斷，嘗試重新連線（最多等 30 秒）..."))
+
+                    recovered = False
+                    for _ in range(30):
+                        time.sleep(1)
+                        if not self.is_recording:
+                            break
+                        try:
+                            stream, _, _ = open_stream(
+                                channels=self.record_channels,
+                                sample_rate=self.record_sample_rate,
+                            )
+                            self._record_stream = stream
+                            recovered = True
+                            self.msg_queue.put(("warning", "系統音訊裝置已重新連線，錄音繼續"))
+                            break
+                        except Exception:
+                            continue
+
+                    if not recovered:
+                        if self.is_recording:
+                            self.msg_queue.put(("error",
+                                "系統音訊裝置無法恢復（逾時 30 秒），錄音已中斷。"
+                                "請停止後重新開始錄音。"))
                         break
-                    try:
-                        stream, _, _ = open_stream(
-                            channels=self.record_channels,
-                            sample_rate=self.record_sample_rate,
-                        )
-                        self._record_stream = stream
-                    except Exception:
-                        time.sleep(1)  # 裝置仍不可用，避免 busy-wait 佔滿 CPU
-                        continue
 
             try:
                 stream.stop_stream()
@@ -970,7 +989,8 @@ class MeetingRecorderApp:
             self.msg_queue.put(("error", str(e)))
 
     # ---- MME 裝置查找 ----
-    def _find_mme_mic_device(self, p: pyaudio.PyAudio) -> int | None:
+    def _find_mme_mic_device(self, p: pyaudio.PyAudio,
+                             wasapi_idx: int | None = None) -> int | None:
         """
         回傳 MME host API 下對應的麥克風裝置 index。
 
@@ -979,22 +999,26 @@ class MeetingRecorderApp:
         啟用這些增強，導致同時錄音時訊號失真。MME 直接存取原始硬體音訊，
         不受影響。
 
+        wasapi_idx：要比對的 WASAPI 裝置 index；省略時使用 self.selected_input_idx。
         比對邏輯：MME 裝置名稱通常是 WASAPI 名稱截斷至前 31 個字元，
         以 WASAPI 名稱開頭比對 MME 名稱。
         找不到對應裝置時 fallback 到 MME 預設輸入。
         """
+        if wasapi_idx is None:
+            wasapi_idx = self.selected_input_idx
+
         try:
             mme_info    = p.get_host_api_info_by_type(pyaudio.paMME)
             mme_api_idx = mme_info["index"]
         except Exception:
-            return self.selected_input_idx  # MME 不可用，沿用原裝置
+            return wasapi_idx  # MME 不可用，沿用原裝置
 
-        if self.selected_input_idx is None:
+        if wasapi_idx is None:
             default_idx = mme_info.get("defaultInputDevice", -1)
             return default_idx if default_idx >= 0 else None
 
         try:
-            wasapi_name = p.get_device_info_by_index(self.selected_input_idx)["name"]
+            wasapi_name = p.get_device_info_by_index(wasapi_idx)["name"]
         except Exception:
             default_idx = mme_info.get("defaultInputDevice", -1)
             return default_idx if default_idx >= 0 else None
@@ -1009,6 +1033,10 @@ class MeetingRecorderApp:
             except Exception:
                 continue
 
+        # 找不到對應 MME 裝置，fallback 到 MME 預設輸入並警告使用者
+        self.msg_queue.put(("warning",
+            f"找不到麥克風「{wasapi_name}」對應的 MME 裝置，"
+            f"改用 MME 預設輸入。實際錄音裝置可能與所選不符，請至裝置設定確認。"))
         default_idx = mme_info.get("defaultInputDevice", -1)
         return default_idx if default_idx >= 0 else None
 
@@ -1090,7 +1118,10 @@ class MeetingRecorderApp:
                                 silence_warned = False
 
                 except OSError:
-                    break  # 麥克風失效，結束錄音
+                    self.msg_queue.put(("vu_mic", 0.0))
+                    level = "warning" if self._save_mode == "both" else "error"
+                    self.msg_queue.put((level, "麥克風裝置連線中斷，麥克風錄音已停止"))
+                    break
 
             try:
                 stream.stop_stream()
@@ -1356,6 +1387,25 @@ class MeetingRecorderApp:
         self.log_text.see("end")
         self.log_text.config(state="disabled")
 
+    def _log_progress(self, text: str, done: bool = False):
+        """覆寫 log 最後一行（進度更新），done=True 時清除旗標讓該行永久保留。"""
+        self.log_text.config(state="normal")
+        if self._progress_line_active:
+            self.log_text.delete("end-1c linestart", "end-1c")
+            self.log_text.insert("end-1c", text)
+        else:
+            self.log_text.insert("end", text + "\n")
+        self.log_text.see("end")
+        self.log_text.config(state="disabled")
+        self._progress_line_active = not done
+
+    def _make_progress_cb(self, label: str, file_idx: int, total: int):
+        """回傳一個 callback，每次呼叫時把進度推進 msg_queue。"""
+        def cb(pct: int):
+            self.msg_queue.put(("progress",
+                f"⏳ 編碼 {label} ({file_idx}/{total}) {pct}%"))
+        return cb
+
     def _reset_ui_after_stop(self):
         """錄音與儲存流程完全結束後，還原所有 UI 元件狀態"""
         self.is_paused = False
@@ -1390,6 +1440,17 @@ class MeetingRecorderApp:
         try:
             while True:
                 msg_type, data = self.msg_queue.get_nowait()
+
+                if msg_type not in ("progress", "progress_done"):
+                    self._progress_line_active = False
+
+                if msg_type == "progress":
+                    self._log_progress(data, done=False)
+                    continue
+
+                if msg_type == "progress_done":
+                    self._log_progress(data, done=True)
+                    continue
 
                 if msg_type == "saved":
                     for fp in data:
