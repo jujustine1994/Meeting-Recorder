@@ -973,9 +973,8 @@ class MeetingRecorderApp:
 
                     if not recovered:
                         if self.is_recording:
-                            self.msg_queue.put(("error",
-                                "系統音訊裝置無法恢復（逾時 30 秒），錄音已中斷。"
-                                "請停止後重新開始錄音。"))
+                            self.msg_queue.put(("device_failed",
+                                "系統音訊裝置無法恢復（逾時 30 秒），自動儲存已錄部分。"))
                         break
 
             try:
@@ -1167,11 +1166,16 @@ class MeetingRecorderApp:
                 stereo.append(s)
             mic_arr = stereo
 
-        # 兩個執行緒可能有微小長度差異，截到短的那個
-        length = min(len(sys_arr), len(mic_arr))
+        # 以長的那軌為準，短的補零（靜音），避免 mic 中途斷線時合併音訊被截短
+        length = max(len(sys_arr), len(mic_arr))
+        sys_len = len(sys_arr)
+        mic_len = len(mic_arr)
 
         mixed = array.array('h', [
-            max(-32768, min(32767, int(sys_arr[i] * _MIX_WEIGHT_SYSTEM + mic_arr[i] * _MIX_WEIGHT_MIC)))
+            max(-32768, min(32767, int(
+                (sys_arr[i] if i < sys_len else 0) * _MIX_WEIGHT_SYSTEM +
+                (mic_arr[i] if i < mic_len else 0) * _MIX_WEIGHT_MIC
+            )))
             for i in range(length)
         ])
         return mixed.tobytes()
@@ -1482,6 +1486,7 @@ class MeetingRecorderApp:
           discarded       — 錄音已捨棄，data = None
           progress        — MP3 編碼進度，data = 字串（覆寫 log 最後一行）
           progress_done   — 編碼階段完成，data = 字串（覆寫最後一行後永久保留）
+          device_failed   — 系統音訊裝置不可恢復，自動觸發儲存流程
         """
         try:
             while True:
@@ -1531,6 +1536,11 @@ class MeetingRecorderApp:
                                           command=self._resume_recording, state="normal")
                     self.btn_discard.config(state="normal")
                     self.status_label.config(text="已暫停", foreground="#FF8C00")
+
+                elif msg_type == "device_failed":
+                    self._log(f"[WARNING] {data}")
+                    if self.is_recording:  # 防止用戶已按停止時重複觸發
+                        self._stop_recording()
 
                 elif msg_type == "discarded":
                     self._log("✗  錄音已捨棄（未儲存）")
