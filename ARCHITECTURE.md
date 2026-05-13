@@ -66,6 +66,23 @@ WASAPI Loopback 的「靜音是否影響錄音」取決於音效卡驅動的截�
 
 程式已內建靜音偵測：連續 10 秒 RMS < 100 時顯示橘色警告橫幅。
 
+## 架構決策紀錄
+
+### `_save_after_stop` 保持單一方法（2026-05-13）
+
+`_save_after_stop` 約 140 行，mode × output_mode 組合產生 5–6 條 code path，全部寫在一個方法裡。
+
+**為何不重構：**
+- 功能正常，沒有 bug
+- 重構（抽 helper 或改 dict dispatch）本身有引入錯誤的風險，且測試無法覆蓋所有組合
+- 只有在「真的要加新輸出格式（WAV、FLAC 等）」時才值得動
+
+**若未來要擴充：**
+先將 `else: # both` 的 ~80 行抽成 `_encode_and_save_both()`，讓 `_save_after_stop` 只負責 setup + dispatch。
+抽出後再新增格式，不要在現有巢狀結構裡直接硬塞。
+
+---
+
 ## 關鍵設定變數（main.py）
 
 | 變數 | 位置 | 說明 |
