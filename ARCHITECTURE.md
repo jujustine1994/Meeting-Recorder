@@ -87,15 +87,11 @@ WASAPI Loopback 的「靜音是否影響錄音」取決於音效卡驅動的截�
 
 | 變數 | 位置 | 說明 |
 |------|------|------|
-| `SILENCE_RMS_THRESHOLD` | `_record_worker()` | 靜音判斷閾值，預設 100（Int16 最大 32767） |
-| `SILENCE_WARNING_SECS` | `_record_worker()` | 靜音幾秒後顯示警告，預設 10 秒 |
-| `chunk` | `_record_worker()` | 每次讀取的音訊幀數，預設 512 |
-| `bit_rate` | `_save_after_stop()` | MP3 位元率，預設 128 kbps |
-| `quality` | `_save_after_stop()` | lameenc 編碼品質，2=高品質 |
-| `_record_stream` | `__init__` | 活躍的 loopback stream 參照，供 `_force_stop_streams()` 解除 read() 阻塞 |
-| `_mic_stream` | `__init__` | 活躍的 mic stream 參照，同上 |
-| `_elapsed_before_pause` | `__init__` | 暫停前已累計秒數，resume 後計時器從此繼續 |
 | `_DEFAULT_BIT_RATE` | 模組頂部 | MP3 位元率預設值，可在進階設定中更改 |
 | `_MIX_WEIGHT_SYSTEM / _MIX_WEIGHT_MIC` | 模組頂部 | 混音權重，進階使用者直接改此常數 |
 | `_SILENCE_RMS_THRESHOLD` | 模組頂部 | 靜音閾值，影響警告橫幅與等化計算 |
 | `_SILENCE_WARNING_SECS` | 模組頂部 | 靜音警告倒計時 |
+| `chunk` | `_record_worker()` | 每次讀取的音訊幀數，預設 512 |
+| `_record_stream` | `__init__` | 活躍的 loopback stream 參照，供 `_force_stop_streams()` 解除 read() 阻塞 |
+| `_mic_stream` | `__init__` | 活躍的 mic stream 參照，同上 |
+| `_elapsed_before_pause` | `__init__` | 暫停前已累計秒數，resume 後計時器從此繼續 |

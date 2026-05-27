@@ -830,6 +830,7 @@ class MeetingRecorderApp:
         self.start_time    = time.time()
         self._elapsed_before_pause = 0.0
         mode = self.record_mode.get()
+        self._save_mode = mode  # 供背景執行緒在錄音途中判斷模式（stop 前 _save_mode 才鎖定完整快照）
 
         # 共用一個 PyAudio 實例，避免兩個執行緒各自 Pa_Initialize() 造成 C 層 assert crash
         self._pa = pyaudio.PyAudio()
