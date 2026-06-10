@@ -38,6 +38,9 @@
 
 ## 更新記錄
 
+### 2026-06-10
+- 修正：`winget install Python` 加入 `--override "/quiet PrependPath=1 Include_pip=1"`，確保靜默安裝後 Python 自動加進 PATH
+
 ### 2026-05-28 — Bug 修正 + 文件清理
 
 - 修復：`both` 模式錄音中途麥克風斷線 30 秒無法重連時，錯誤訊息等級誤判為 `error`（觸發 UI 強制重置），應為 `warning`（保留系統音訊繼續錄）
