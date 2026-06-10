@@ -35,7 +35,7 @@ if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
         if (Get-Command winget -ErrorAction SilentlyContinue) {
             Write-Host "[INFO] 透過 winget 安裝 Python（x64），請稍候..." -ForegroundColor Gray
             # 指定 x64 架構，確保 ARM64 電腦也安裝 x64 版（pyaudiowpatch 相容性需求）
-            winget install --id Python.Python.3 -e --silent --accept-source-agreements --accept-package-agreements --architecture x64
+            winget install --id Python.Python.3 -e --silent --accept-source-agreements --accept-package-agreements --architecture x64 --override "/quiet PrependPath=1 Include_pip=1"
         } else {
             Write-Host "[ERROR] 找不到 winget，請手動至 https://www.python.org/ 下載 Windows x64 版安裝後重新執行。" -ForegroundColor Red
             Read-Host "按 Enter 關閉"; exit 1
