@@ -134,9 +134,9 @@ class TestRmsToDisplayPct(unittest.TestCase):
     def test_zero_rms_is_zero_pct(self):
         self.assertEqual(_rms_to_display_pct(0.0), 0.0)
 
-    def test_typical_speech_rms_lands_in_20_to_50_pct(self):
-        self.assertAlmostEqual(_rms_to_display_pct(1600.0), 20.0, places=1)
-        self.assertAlmostEqual(_rms_to_display_pct(4000.0), 50.0, places=1)
+    def test_rms_scales_with_divisor(self):
+        self.assertAlmostEqual(_rms_to_display_pct(2600.0), 20.0, places=1)
+        self.assertAlmostEqual(_rms_to_display_pct(6500.0), 50.0, places=1)
 
     def test_full_scale_rms_clamped_to_100(self):
         self.assertEqual(_rms_to_display_pct(32767.0), 100.0)

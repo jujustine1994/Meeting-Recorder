@@ -29,8 +29,8 @@ _MIX_WEIGHT_SYSTEM      = 0.6    # 系統音軌混音權重（兩軌混音時）
 _MIX_WEIGHT_MIC         = 0.6    # 麥克風混音權重
 _SILENCE_RMS_THRESHOLD  = 100    # 靜音判斷 RMS 閾值（Int16 0~32767）
 _SILENCE_WARNING_SECS   = 10     # 連續靜音幾秒後顯示警告
-_VU_DISPLAY_DIVISOR     = 80     # VU meter 顯示除數：正常說話 RMS 換算後約落在 20~50%
-_CLIP_PEAK_THRESHOLD    = int(32767 * 0.9)   # 峰值達此值視為接近爆音（約 29491）
+_VU_DISPLAY_DIVISOR     = 130    # VU meter 顯示除數：調鬆敏銳度，避免小音量就衝到高百分比
+_CLIP_PEAK_THRESHOLD    = int(32767 * 0.96)  # 峰值達此值視為接近爆音（約 31456，調高避免誤判）
 _CLIP_WARNING_HOLD_SECS = 1.5    # 爆音警示保持顯示的秒數，避免瞬間峰值一閃即逝
 
 
