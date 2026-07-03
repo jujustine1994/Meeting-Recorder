@@ -99,7 +99,7 @@ def _compute_rms(data: bytes) -> float:
 
 def _rms_to_display_pct(rms: float) -> float:
     """把 RMS（0~32767）換算成 VU meter 顯示用的 0~100 百分比。"""
-    return min(100.0, rms / _VU_DISPLAY_DIVISOR)
+    return max(0.0, min(100.0, rms / _VU_DISPLAY_DIVISOR))
 
 
 def _compute_peak(data: bytes) -> int:

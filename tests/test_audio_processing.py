@@ -144,6 +144,9 @@ class TestRmsToDisplayPct(unittest.TestCase):
     def test_rms_exceeding_divisor_range_clamped_to_100(self):
         self.assertEqual(_rms_to_display_pct(100000.0), 100.0)
 
+    def test_negative_rms_clamped_to_zero(self):
+        self.assertEqual(_rms_to_display_pct(-500.0), 0.0)
+
 
 class TestComputePeak(unittest.TestCase):
 
