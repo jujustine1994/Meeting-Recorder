@@ -298,23 +298,32 @@ class MeetingRecorderApp:
         vu_frame = tk.Frame(frame_btn)
         vu_frame.pack(pady=(12, 0))
 
+        ttk.Style().configure("Clip.Horizontal.TProgressbar", background="red")
+
         tk.Label(vu_frame, text="系統音訊", width=8, anchor="w",
                  font=("", 9)).grid(row=0, column=0, padx=(0, 6))
-        ttk.Progressbar(vu_frame, variable=self.vu_system_var,
-                        maximum=100, length=200).grid(row=0, column=1)
+        self.vu_system_pb = ttk.Progressbar(vu_frame, variable=self.vu_system_var,
+                        maximum=100, length=200)
+        self.vu_system_pb.grid(row=0, column=1)
         self.vu_system_pct = ttk.Label(vu_frame, text="  0%", width=5,
                                         foreground="gray", font=("Consolas", 9))
         self.vu_system_pct.grid(row=0, column=2, padx=(4, 0))
 
         tk.Label(vu_frame, text="麥克風", width=8, anchor="w",
                  font=("", 9)).grid(row=1, column=0, padx=(0, 6), pady=(4, 0))
-        ttk.Progressbar(vu_frame, variable=self.vu_mic_var,
-                        maximum=100, length=200).grid(row=1, column=1, pady=(4, 0))
+        self.vu_mic_pb = ttk.Progressbar(vu_frame, variable=self.vu_mic_var,
+                        maximum=100, length=200)
+        self.vu_mic_pb.grid(row=1, column=1, pady=(4, 0))
         self.vu_mic_pct = ttk.Label(vu_frame, text="  0%", width=5,
                                      foreground="gray", font=("Consolas", 9))
         self.vu_mic_pct.grid(row=1, column=2, padx=(4, 0), pady=(4, 0))
         self.mic_offline_label = ttk.Label(vu_frame, text="", foreground="red", font=("", 9))
         self.mic_offline_label.grid(row=1, column=3, padx=(6, 0), pady=(4, 0))
+
+        self._sys_clip_until  = 0.0
+        self._mic_clip_until  = 0.0
+        self._sys_clip_active = False
+        self._mic_clip_active = False
 
         # 裝置設定 + 進階設定 雙按鈕列
         btn_row = tk.Frame(frame_btn)
