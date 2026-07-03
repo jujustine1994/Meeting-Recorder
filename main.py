@@ -967,7 +967,9 @@ class MeetingRecorderApp:
 
                     # ---- 靜音偵測 ----
                     rms = _compute_rms(data)
-                    self.msg_queue.put(("vu_system", min(100.0, rms / 327.67)))
+                    self.msg_queue.put(("vu_system", _rms_to_display_pct(rms)))
+                    if _is_clipping(_compute_peak(data)):
+                        self.msg_queue.put(("vu_system_clip", True))
                     if rms < SILENCE_RMS_THRESHOLD:
                         if silence_start is None:
                             silence_start = time.time()
