@@ -471,9 +471,11 @@ class MeetingRecorderApp:
                                                        sticky="ew", pady=(0, 8))
 
         mic_level = tk.DoubleVar(value=0)
-        ttk.Progressbar(frame_mic, variable=mic_level,
-                        maximum=100, length=340).grid(row=1, column=0, columnspan=2,
-                                                       sticky="ew", pady=(0, 4))
+        mic_pb = ttk.Progressbar(frame_mic, variable=mic_level,
+                        maximum=100, length=340)
+        mic_pb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        mic_clip_until  = [0.0]
+        mic_clip_active = [False]
         mic_status = ttk.Label(frame_mic, text="請對著麥克風說話，確認音量指示條有所反應",
                                foreground="gray")
         mic_status.grid(row=2, column=0, columnspan=2, sticky="w")
@@ -510,9 +512,20 @@ class MeetingRecorderApp:
                     data = stream.read(512, exception_on_overflow=False)
                     rms  = _compute_rms(data)
                     try:
-                        mic_level.set(min(100, rms / 327.67))
+                        mic_level.set(_rms_to_display_pct(rms))
                     except Exception:
                         break  # 視窗已關閉，DoubleVar 失效，結束迴圈
+
+                    if _is_clipping(_compute_peak(data)):
+                        mic_clip_until[0] = time.time() + _CLIP_WARNING_HOLD_SECS
+                    clip_active = time.time() < mic_clip_until[0]
+                    if clip_active != mic_clip_active[0]:
+                        mic_clip_active[0] = clip_active
+                        style = "Clip.Horizontal.TProgressbar" if clip_active else "Horizontal.TProgressbar"
+                        try:
+                            win.after(0, lambda s=style: mic_pb.config(style=s))
+                        except Exception:
+                            break  # 視窗已關閉，結束迴圈
                 stream.stop_stream()
                 stream.close()
             except Exception as e:
@@ -529,6 +542,7 @@ class MeetingRecorderApp:
                         btn_mic.config(state="normal"),
                         btn_mic_stop.config(state="disabled"),
                         mic_level.set(0),
+                        mic_pb.config(style="Horizontal.TProgressbar"),
                     ))
                 except Exception:
                     pass
@@ -564,9 +578,11 @@ class MeetingRecorderApp:
                                                        sticky="ew", pady=(0, 8))
 
         sys_level = tk.DoubleVar(value=0)
-        ttk.Progressbar(frame_sys, variable=sys_level,
-                        maximum=100, length=340).grid(row=1, column=0, columnspan=2,
-                                                       sticky="ew", pady=(0, 4))
+        sys_pb = ttk.Progressbar(frame_sys, variable=sys_level,
+                        maximum=100, length=340)
+        sys_pb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
+        sys_clip_until  = [0.0]
+        sys_clip_active = [False]
         sys_status = ttk.Label(frame_sys,
                                text="請先播放任意音訊（音樂、影片等），再按下開始測試",
                                foreground="gray")
@@ -596,9 +612,20 @@ class MeetingRecorderApp:
                     data = stream.read(512, exception_on_overflow=False)
                     rms  = _compute_rms(data)
                     try:
-                        sys_level.set(min(100, rms / 327.67))
+                        sys_level.set(_rms_to_display_pct(rms))
                     except Exception:
                         break  # 視窗已關閉，結束迴圈
+
+                    if _is_clipping(_compute_peak(data)):
+                        sys_clip_until[0] = time.time() + _CLIP_WARNING_HOLD_SECS
+                    clip_active = time.time() < sys_clip_until[0]
+                    if clip_active != sys_clip_active[0]:
+                        sys_clip_active[0] = clip_active
+                        style = "Clip.Horizontal.TProgressbar" if clip_active else "Horizontal.TProgressbar"
+                        try:
+                            win.after(0, lambda s=style: sys_pb.config(style=s))
+                        except Exception:
+                            break  # 視窗已關閉，結束迴圈
                 stream.stop_stream()
                 stream.close()
             except Exception as e:
@@ -615,6 +642,7 @@ class MeetingRecorderApp:
                         btn_sys.config(state="normal"),
                         btn_sys_stop.config(state="disabled"),
                         sys_level.set(0),
+                        sys_pb.config(style="Horizontal.TProgressbar"),
                     ))
                 except Exception:
                     pass
