@@ -135,11 +135,12 @@ class TestRmsToDisplayPct(unittest.TestCase):
         self.assertEqual(_rms_to_display_pct(0.0), 0.0)
 
     def test_rms_scales_with_divisor(self):
-        self.assertAlmostEqual(_rms_to_display_pct(2600.0), 20.0, places=1)
-        self.assertAlmostEqual(_rms_to_display_pct(6500.0), 50.0, places=1)
+        self.assertAlmostEqual(_rms_to_display_pct(13000.0), 20.0, places=1)
+        self.assertAlmostEqual(_rms_to_display_pct(32500.0), 50.0, places=1)
 
-    def test_full_scale_rms_clamped_to_100(self):
-        self.assertEqual(_rms_to_display_pct(32767.0), 100.0)
+    def test_theoretical_max_rms_does_not_clamp_at_current_divisor(self):
+        # 除數 650 下，Int16 理論最大 RMS（32767）換算約 50%，不會撞到 clamp 上限
+        self.assertAlmostEqual(_rms_to_display_pct(32767.0), 32767.0 / 650, places=1)
 
     def test_rms_exceeding_divisor_range_clamped_to_100(self):
         self.assertEqual(_rms_to_display_pct(100000.0), 100.0)
