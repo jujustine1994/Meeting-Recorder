@@ -29,6 +29,9 @@ _MIX_WEIGHT_SYSTEM      = 0.6    # 系統音軌混音權重（兩軌混音時）
 _MIX_WEIGHT_MIC         = 0.6    # 麥克風混音權重
 _SILENCE_RMS_THRESHOLD  = 100    # 靜音判斷 RMS 閾值（Int16 0~32767）
 _SILENCE_WARNING_SECS   = 10     # 連續靜音幾秒後顯示警告
+_VU_DISPLAY_DIVISOR     = 80     # VU meter 顯示除數：正常說話 RMS 換算後約落在 20~50%
+_CLIP_PEAK_THRESHOLD    = int(32767 * 0.9)   # 峰值達此值視為接近爆音（約 29491）
+_CLIP_WARNING_HOLD_SECS = 1.5    # 爆音警示保持顯示的秒數，避免瞬間峰值一閃即逝
 
 
 # ---- CTH Banner（終端機用，launcher 視窗可見）----
@@ -92,6 +95,28 @@ def _compute_rms(data: bytes) -> float:
         return 0.0
     samples = struct.unpack(f"{num_samples}h", data)
     return math.sqrt(sum(s * s for s in samples) / num_samples)
+
+
+def _rms_to_display_pct(rms: float) -> float:
+    """把 RMS（0~32767）換算成 VU meter 顯示用的 0~100 百分比。"""
+    return min(100.0, rms / _VU_DISPLAY_DIVISOR)
+
+
+def _compute_peak(data: bytes) -> int:
+    """
+    計算 PCM Int16 音訊資料的峰值（樣本最大絕對值）。
+    回傳範圍 0 ~ 32767，用於偵測爆音，與 RMS（平均音量）分開判斷。
+    """
+    num_samples = len(data) // 2
+    if num_samples == 0:
+        return 0
+    samples = struct.unpack(f"{num_samples}h", data)
+    return max(abs(s) for s in samples)
+
+
+def _is_clipping(peak: int) -> bool:
+    """峰值是否達到爆音警示閾值。"""
+    return peak >= _CLIP_PEAK_THRESHOLD
 
 
 # ---- 主視窗 ----

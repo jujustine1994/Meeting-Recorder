@@ -12,7 +12,14 @@ unittest.mock.patch.dict('sys.modules', {
 }).start()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from main import MeetingRecorderApp, _compute_rms
+from main import (
+    MeetingRecorderApp,
+    _compute_rms,
+    _rms_to_display_pct,
+    _compute_peak,
+    _is_clipping,
+    _CLIP_PEAK_THRESHOLD,
+)
 
 
 def make_pcm(value: int, n_samples: int = 512) -> bytes:
@@ -120,6 +127,51 @@ class TestApplyGainToPcm(unittest.TestCase):
         arr = array.array('h')
         arr.frombytes(result)
         self.assertEqual(list(arr), [0, 0, 0, 0])
+
+
+class TestRmsToDisplayPct(unittest.TestCase):
+
+    def test_zero_rms_is_zero_pct(self):
+        self.assertEqual(_rms_to_display_pct(0.0), 0.0)
+
+    def test_typical_speech_rms_lands_in_20_to_50_pct(self):
+        self.assertAlmostEqual(_rms_to_display_pct(1600.0), 20.0, places=1)
+        self.assertAlmostEqual(_rms_to_display_pct(4000.0), 50.0, places=1)
+
+    def test_full_scale_rms_clamped_to_100(self):
+        self.assertEqual(_rms_to_display_pct(32767.0), 100.0)
+
+    def test_rms_exceeding_divisor_range_clamped_to_100(self):
+        self.assertEqual(_rms_to_display_pct(100000.0), 100.0)
+
+
+class TestComputePeak(unittest.TestCase):
+
+    def test_silence_peak_is_zero(self):
+        self.assertEqual(_compute_peak(make_pcm(0)), 0)
+
+    def test_positive_peak(self):
+        data = struct.pack("4h", 100, 500, -300, 200)
+        self.assertEqual(_compute_peak(data), 500)
+
+    def test_negative_peak_uses_absolute_value(self):
+        data = struct.pack("4h", 100, -32000, 300, 200)
+        self.assertEqual(_compute_peak(data), 32000)
+
+    def test_empty_data_returns_zero(self):
+        self.assertEqual(_compute_peak(b""), 0)
+
+
+class TestIsClipping(unittest.TestCase):
+
+    def test_below_threshold_not_clipping(self):
+        self.assertFalse(_is_clipping(29000))
+
+    def test_at_threshold_is_clipping(self):
+        self.assertTrue(_is_clipping(_CLIP_PEAK_THRESHOLD))
+
+    def test_full_scale_is_clipping(self):
+        self.assertTrue(_is_clipping(32767))
 
 
 if __name__ == "__main__":
