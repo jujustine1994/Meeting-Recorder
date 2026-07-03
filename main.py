@@ -128,6 +128,7 @@ class MeetingRecorderApp:
 
         # 錄音狀態
         self.is_recording = False
+        self._is_saving = False  # True＝停止/暫停後正在編碼存檔，尚未完成
         self.record_frames: list[bytes] = []   # loopback 音訊暫存
         self.mic_frames:    list[bytes] = []   # 麥克風音訊暫存
         self.record_channels    = 2            # loopback 聲道數（由裝置決定，最多 2）
@@ -175,6 +176,7 @@ class MeetingRecorderApp:
         self.record_mode = tk.StringVar(value="system")
 
         self._build_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._poll_queue()
 
     # ---- UI 建置 ----
@@ -936,6 +938,7 @@ class MeetingRecorderApp:
 
     def _stop_recording(self):
         self.is_recording = False
+        self._is_saving = True
 
         # 在主執行緒鎖定模式，避免背景 _save_after_stop 從 tkinter StringVar 讀取
         self._save_mode = self.record_mode.get()
@@ -1561,6 +1564,7 @@ class MeetingRecorderApp:
 
     def _reset_ui_after_stop(self):
         """錄音與儲存流程完全結束後，還原所有 UI 元件狀態"""
+        self._is_saving = False
         self.is_paused = False
         self._elapsed_before_pause = 0.0
         self.btn_record.config(state="normal", text="⏺  開始錄音")
@@ -1581,6 +1585,20 @@ class MeetingRecorderApp:
         self._mic_clip_active = False
         self._sys_clip_until = 0.0
         self._mic_clip_until = 0.0
+
+    def _on_close_request(self):
+        """
+        WM_DELETE_WINDOW callback。存檔處理中關閉視窗會跳出確認，
+        避免無提示中斷正在寫入的 MP3 檔案；非處理中則直接關閉，行為不變。
+        """
+        if self._is_saving:
+            proceed = messagebox.askyesno(
+                "檔案處理中",
+                "檔案處理中，若現在關閉將遺失處理進度，確定要關閉嗎？"
+            )
+            if not proceed:
+                return
+        self.root.destroy()
 
     def _update_clip_style(self, progressbar, pct_label, until_attr, active_attr):
         """
