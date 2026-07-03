@@ -488,7 +488,7 @@ class MeetingRecorderApp:
             """
             背景執行緒：持續讀取麥克風音訊並更新音量指示條。
 
-            RMS 範圍 0~32767（Int16 最大值），除以 327.67 換算為 0~100 的百分比。
+            RMS 範圍 0~32767（Int16 最大值），透過 _rms_to_display_pct() 換算為 0~100 的百分比。
             mic_level.set() 直接從背景執行緒呼叫：tkinter DoubleVar 的 set 在 CPython
             下是執行緒安全的，Progressbar 會在下次主迴圈繪製時反映新值。
 
@@ -537,6 +537,7 @@ class MeetingRecorderApp:
             finally:
                 p.terminate()
                 mic_running[0] = False
+                mic_clip_active[0] = False
                 try:
                     win.after(0, lambda: (
                         btn_mic.config(state="normal"),
@@ -637,6 +638,7 @@ class MeetingRecorderApp:
             finally:
                 p.terminate()
                 sys_running[0] = False
+                sys_clip_active[0] = False
                 try:
                     win.after(0, lambda: (
                         btn_sys.config(state="normal"),
@@ -1577,6 +1579,8 @@ class MeetingRecorderApp:
         self.vu_mic_pb.config(style="Horizontal.TProgressbar")
         self._sys_clip_active = False
         self._mic_clip_active = False
+        self._sys_clip_until = 0.0
+        self._mic_clip_until = 0.0
 
     def _update_clip_style(self, progressbar, pct_label, until_attr, active_attr):
         """
