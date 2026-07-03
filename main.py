@@ -1545,6 +1545,23 @@ class MeetingRecorderApp:
         self.vu_system_pct.config(text=f"{0:3d}%")
         self.vu_mic_pct.config(text=f"{0:3d}%")
         self.mic_offline_label.config(text="")
+        self.vu_system_pb.config(style="Horizontal.TProgressbar")
+        self.vu_mic_pb.config(style="Horizontal.TProgressbar")
+        self._sys_clip_active = False
+        self._mic_clip_active = False
+
+    def _update_clip_style(self, progressbar, pct_label, until_attr, active_attr):
+        """
+        依 hold 截止時間決定爆音警示是否該顯示，只有狀態改變時才呼叫 .config()，
+        避免每 100ms tick 都重繪 widget。
+        """
+        active = time.time() < getattr(self, until_attr)
+        if active == getattr(self, active_attr):
+            return
+        setattr(self, active_attr, active)
+        style = "Clip.Horizontal.TProgressbar" if active else "Horizontal.TProgressbar"
+        progressbar.config(style=style)
+        pct_label.config(foreground="red" if active else "gray")
 
     def _poll_queue(self):
         """
@@ -1565,6 +1582,8 @@ class MeetingRecorderApp:
           progress_done   — 編碼階段完成，data = 字串（覆寫最後一行後永久保留）
           device_failed   — 系統音訊裝置不可恢復，自動觸發儲存流程
           mic_offline     — 麥克風離線警示，data = True（顯示）/ False（清除）
+          vu_system_clip  — 系統音訊接近爆音，data = True（觸發 1.5 秒紅色警示）
+          vu_mic_clip     — 麥克風接近爆音，data = True（觸發 1.5 秒紅色警示）
         """
         try:
             while True:
@@ -1608,6 +1627,12 @@ class MeetingRecorderApp:
                     self.vu_mic_var.set(val)
                     self.vu_mic_pct.config(text=f"{int(val):3d}%")
 
+                elif msg_type == "vu_system_clip":
+                    self._sys_clip_until = time.time() + _CLIP_WARNING_HOLD_SECS
+
+                elif msg_type == "vu_mic_clip":
+                    self._mic_clip_until = time.time() + _CLIP_WARNING_HOLD_SECS
+
                 elif msg_type == "mic_offline":
                     self.mic_offline_label.config(text="⚠ 麥克風斷線" if data else "")
 
@@ -1640,6 +1665,12 @@ class MeetingRecorderApp:
 
         except queue.Empty:
             pass
+
+        self._update_clip_style(self.vu_system_pb, self.vu_system_pct,
+                                 "_sys_clip_until", "_sys_clip_active")
+        self._update_clip_style(self.vu_mic_pb, self.vu_mic_pct,
+                                 "_mic_clip_until", "_mic_clip_active")
+
         self.root.after(100, self._poll_queue)
 
 
