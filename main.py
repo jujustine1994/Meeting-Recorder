@@ -1140,7 +1140,9 @@ class MeetingRecorderApp:
                     self.mic_frames.append(data)
 
                     rms = _compute_rms(data)
-                    self.msg_queue.put(("vu_mic", min(100.0, rms / 327.67)))
+                    self.msg_queue.put(("vu_mic", _rms_to_display_pct(rms)))
+                    if _is_clipping(_compute_peak(data)):
+                        self.msg_queue.put(("vu_mic_clip", True))
 
                     if check_silence:
                         if rms < SILENCE_RMS_THRESHOLD:
