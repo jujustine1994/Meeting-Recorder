@@ -23,6 +23,49 @@ import pyaudiowpatch as pyaudio
 import lameenc
 
 
+# ---- 執行紀錄（logs/app.log）----
+def _find_project_root() -> str:
+    """往上找 launcher.ps1 所在目錄＝專案根目錄。
+
+    不可寫死 os.path.join(SCRIPT_DIR, "..", "logs")：主程式在根目錄的專案會算到
+    專案外層（Documents\\Code\\logs），污染其他專案。用這個函式，主程式在根目錄
+    或 src/ 都對，日後把 .py 搬進 src/ 也不會壞。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    d = here
+    while True:
+        if os.path.exists(os.path.join(d, "launcher.ps1")):
+            return d
+        parent = os.path.dirname(d)
+        if parent == d:      # 找到磁碟根目錄仍沒找到，退回自己所在目錄，至少不寫到專案外
+            return here
+        d = parent
+
+
+LOG_DIR = os.path.join(_find_project_root(), "logs")
+LOG_FILE = os.path.join(LOG_DIR, "app.log")
+
+
+def _write_log(msg: str, level: str = "INFO"):
+    """寫一行到 logs/app.log。每次開檔→寫→關檔，不持有 handle（地雷十）"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"[{time.strftime('%H:%M:%S')}] [{level:<5}] {msg}\n")
+    except OSError:
+        pass   # log 掛掉不能拖垮主程式；也涵蓋兩個實例同時跑撞在一起
+
+
+def _write_log_header(msg: str):
+    """任務起始行，唯一有完整日期的行"""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(f"=== {time.strftime('%Y-%m-%d %H:%M:%S')} {msg} ===\n")
+    except OSError:
+        pass
+
+
 # ---- 可自行調整的進階參數（直接編輯此區段） ----
 _DEFAULT_BIT_RATE       = 128    # kbps：MP3 位元率預設值，可在進階設定中更改
 _MIX_WEIGHT_SYSTEM      = 0.6    # 系統音軌混音權重（兩軌混音時）
@@ -898,6 +941,11 @@ class MeetingRecorderApp:
         mode = self.record_mode.get()
         self._save_mode = mode  # 供背景執行緒在錄音途中判斷模式（stop 前 _save_mode 才鎖定完整快照）
 
+        # ---- 任務開始：一行，關鍵設定塞在同一行 ----
+        _write_log_header(
+            f"錄音 模式:{mode} | 輸出:{self.output_mode.get()} | {self.bit_rate.get()}kbps"
+        )
+
         # 共用一個 PyAudio 實例，避免兩個執行緒各自 Pa_Initialize() 造成 C 層 assert crash
         self._pa = pyaudio.PyAudio()
 
@@ -1045,6 +1093,7 @@ class MeetingRecorderApp:
 
                     if not recovered:
                         if self.is_recording:
+                            _write_log("系統音訊裝置中斷 -> 30秒逾時未恢復 | 重試 30/30", "ERROR")
                             self.msg_queue.put(("device_failed",
                                 "系統音訊裝置無法恢復（逾時 30 秒），自動儲存已錄部分。"))
                         break
@@ -1057,6 +1106,7 @@ class MeetingRecorderApp:
             self._record_stream = None
 
         except Exception as e:
+            _write_log(f"錄音執行緒(system) -> {type(e).__name__}", "ERROR")
             self.msg_queue.put(("error", str(e)))
 
     # ---- MME 裝置查找 ----
@@ -1227,6 +1277,7 @@ class MeetingRecorderApp:
                     if not recovered:
                         if self.is_recording:
                             level = "warning" if self._save_mode == "both" else "error"
+                            _write_log("麥克風裝置中斷 -> 30秒逾時未恢復 | 重試 30/30", "ERROR")
                             self.msg_queue.put((level,
                                 "麥克風裝置無法恢復（逾時 30 秒），麥克風錄音已停止"))
                         break
@@ -1242,6 +1293,7 @@ class MeetingRecorderApp:
             # Mode "both"：麥克風失敗不中止程式，但通知使用者
             # Mode "mic"：視為致命錯誤
             level = "warning" if self._save_mode == "both" else "error"
+            _write_log(f"錄音執行緒(mic) -> {type(e).__name__}", "ERROR")
             self.msg_queue.put((level, f"麥克風錯誤：{e}"))
 
     # ---- 混音 ----
@@ -1534,10 +1586,18 @@ class MeetingRecorderApp:
             self.msg_queue.put(("saved", [filepath]))
 
         except Exception as e:
+            _write_log(f"儲存處理 -> {type(e).__name__}", "ERROR")
             self.msg_queue.put(("error", str(e)))
 
     # ---- 執行緒安全 UI 更新 ----
-    def _log(self, msg: str):
+    def _log(self, msg: str, level: str = "INFO", to_file: bool = False):
+        """更新 log 顯示；to_file=True 時同時寫入 logs/app.log。
+
+        預設 False（fail-closed）：漏帶旗標時只是少記一行，不是把不該落檔的
+        訊息誤記下去。只有任務起始／錯誤／任務結果三種該落檔，見呼叫端。
+        """
+        if to_file:
+            _write_log(msg, level)
         self.log_text.config(state="normal")
         self.log_text.insert("end", msg + "\n")
         self.log_text.see("end")
@@ -1655,10 +1715,16 @@ class MeetingRecorderApp:
                         self._log(f"✓  {os.path.basename(fp)}")
                     self.status_label.config(
                         text=f"已儲存：{os.path.basename(data[-1])}", foreground="green")
+                    # ---- 任務結果：成功 + 耗時 ----
+                    elapsed = int(time.time() - self.start_time)
+                    _write_log(f"成功，耗時 {elapsed // 60}分{elapsed % 60}秒 | 存檔 {len(data)} 個", "OK")
                     self._reset_ui_after_stop()
 
                 elif msg_type == "error":
                     self._log(f"[ERROR] {data}")
+                    # ---- 任務結果：失敗 + 耗時 ----
+                    elapsed = int(time.time() - self.start_time)
+                    _write_log(f"失敗，耗時 {elapsed // 60}分{elapsed % 60}秒", "FAIL")
                     self._reset_ui_after_stop()
                     self.status_label.config(text="發生錯誤，請查看記錄", foreground="red")
                     self.is_recording = False
@@ -1701,6 +1767,9 @@ class MeetingRecorderApp:
 
                 elif msg_type == "discarded":
                     self._log("✗  錄音已捨棄（未儲存）")
+                    # ---- 任務結果：使用者主動捨棄 + 耗時 ----
+                    elapsed = int(time.time() - self.start_time)
+                    _write_log(f"使用者捨棄，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK")
                     self._reset_ui_after_stop()
                     self.status_label.config(text="錄音已捨棄", foreground="gray")
 
