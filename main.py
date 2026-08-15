@@ -27,6 +27,7 @@ import lameenc
 import i18n
 from i18n import t
 from config import CONFIG_PATH, load_config, save_config
+from logtext import LOG_TEXT
 
 
 # ---- 執行紀錄（logs/app.log）----
@@ -1023,9 +1024,8 @@ class MeetingRecorderApp:
         self._save_mode = mode  # 供背景執行緒在錄音途中判斷模式（stop 前 _save_mode 才鎖定完整快照）
 
         # ---- 任務開始：一行，關鍵設定塞在同一行 ----
-        _write_log_header(
-            f"錄音 模式:{mode} | 輸出:{self.output_mode.get()} | {self.bit_rate.get()}kbps"
-        )
+        _write_log_header(LOG_TEXT["record_start"].format(
+            mode=mode, output=self.output_mode.get(), bitrate=self.bit_rate.get()))
 
         # 共用一個 PyAudio 實例，避免兩個執行緒各自 Pa_Initialize() 造成 C 層 assert crash
         self._pa = pyaudio.PyAudio()
@@ -1174,7 +1174,7 @@ class MeetingRecorderApp:
 
                     if not recovered:
                         if self.is_recording:
-                            _write_log("系統音訊裝置中斷 -> 30秒逾時未恢復 | 重試 30/30", "ERROR")
+                            _write_log(LOG_TEXT["sys_device_timeout"], "ERROR")
                             self.msg_queue.put(("device_failed",
                                 "系統音訊裝置無法恢復（逾時 30 秒），自動儲存已錄部分。"))
                         break
@@ -1187,7 +1187,7 @@ class MeetingRecorderApp:
             self._record_stream = None
 
         except Exception as e:
-            _write_log(f"錄音執行緒(system) -> {type(e).__name__}", "ERROR")
+            _write_log(LOG_TEXT["thread_error_sys"].format(exc=type(e).__name__), "ERROR")
             self.msg_queue.put(("error", str(e)))
 
     # ---- MME 裝置查找 ----
@@ -1358,7 +1358,7 @@ class MeetingRecorderApp:
                     if not recovered:
                         if self.is_recording:
                             level = "warning" if self._save_mode == "both" else "error"
-                            _write_log("麥克風裝置中斷 -> 30秒逾時未恢復 | 重試 30/30", "ERROR")
+                            _write_log(LOG_TEXT["mic_device_timeout"], "ERROR")
                             self.msg_queue.put((level,
                                 "麥克風裝置無法恢復（逾時 30 秒），麥克風錄音已停止"))
                         break
@@ -1374,7 +1374,7 @@ class MeetingRecorderApp:
             # Mode "both"：麥克風失敗不中止程式，但通知使用者
             # Mode "mic"：視為致命錯誤
             level = "warning" if self._save_mode == "both" else "error"
-            _write_log(f"錄音執行緒(mic) -> {type(e).__name__}", "ERROR")
+            _write_log(LOG_TEXT["thread_error_mic"].format(exc=type(e).__name__), "ERROR")
             self.msg_queue.put((level, f"麥克風錯誤：{e}"))
 
     # ---- 混音 ----
@@ -1667,7 +1667,7 @@ class MeetingRecorderApp:
             self.msg_queue.put(("saved", [filepath]))
 
         except Exception as e:
-            _write_log(f"儲存處理 -> {type(e).__name__}", "ERROR")
+            _write_log(LOG_TEXT["save_error"].format(exc=type(e).__name__), "ERROR")
             self.msg_queue.put(("error", str(e)))
 
     # ---- 執行緒安全 UI 更新 ----
@@ -1798,14 +1798,16 @@ class MeetingRecorderApp:
                         text=f"已儲存：{os.path.basename(data[-1])}", foreground="green")
                     # ---- 任務結果：成功 + 耗時 ----
                     elapsed = int(time.time() - self.start_time)
-                    _write_log(f"成功，耗時 {elapsed // 60}分{elapsed % 60}秒 | 存檔 {len(data)} 個", "OK")
+                    _write_log(LOG_TEXT["result_ok"].format(
+                        minutes=elapsed // 60, seconds=elapsed % 60, count=len(data)), "OK")
                     self._reset_ui_after_stop()
 
                 elif msg_type == "error":
                     self._log(f"[ERROR] {data}")
                     # ---- 任務結果：失敗 + 耗時 ----
                     elapsed = int(time.time() - self.start_time)
-                    _write_log(f"失敗，耗時 {elapsed // 60}分{elapsed % 60}秒", "FAIL")
+                    _write_log(LOG_TEXT["result_fail"].format(
+                        minutes=elapsed // 60, seconds=elapsed % 60), "FAIL")
                     self._reset_ui_after_stop()
                     self.status_label.config(text="發生錯誤，請查看記錄", foreground="red")
                     self.is_recording = False
@@ -1850,7 +1852,8 @@ class MeetingRecorderApp:
                     self._log("✗  錄音已捨棄（未儲存）")
                     # ---- 任務結果：使用者主動捨棄 + 耗時 ----
                     elapsed = int(time.time() - self.start_time)
-                    _write_log(f"使用者捨棄，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK")
+                    _write_log(LOG_TEXT["result_discarded"].format(
+                        minutes=elapsed // 60, seconds=elapsed % 60), "OK")
                     self._reset_ui_after_stop()
                     self.status_label.config(text="錄音已捨棄", foreground="gray")
 
