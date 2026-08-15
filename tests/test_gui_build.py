@@ -44,6 +44,16 @@ def _collect(widget, acc):
                 acc.append(widget.heading(col).get("text", ""))
     except Exception:
         pass
+    # ⚠ tk.Text / ScrolledText 的內容 cget("text") 完全掃不到。本工具的
+    #   「錄音記錄」區就是 ScrolledText，開場提示那條字串整條住在裡面——
+    #   漏掉這段，那條漏翻永遠測不出來。
+    try:
+        if isinstance(widget, tk.Text):
+            for line in widget.get("1.0", "end").splitlines():
+                if line.strip():
+                    acc.append(line)
+    except Exception:
+        pass
     for child in widget.winfo_children():
         _collect(child, acc)
 

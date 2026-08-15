@@ -1084,8 +1084,11 @@ class MeetingRecorderApp:
         self.timer_label.config(foreground="gray")
         self.filename_entry.config(state="normal")
 
-        t = threading.Thread(target=self._save_after_stop, daemon=True)
-        t.start()
+        # ⚠ 不可命名為 t：模組層級的 t 是 i18n 的查表函式，函式內任一處指派
+        # 同名就會讓整個函式的 t 變成區域變數，上面那幾行 t("gui.btn.saving")
+        # 會直接 UnboundLocalError。tests/test_i18n.py 有一條專門擋這件事。
+        save_thread = threading.Thread(target=self._save_after_stop, daemon=True)
+        save_thread.start()
 
     # ---- 錄音執行緒：Loopback ----
     def _record_worker(self, p: pyaudio.PyAudio):

@@ -94,6 +94,33 @@ def test_scan_set_is_not_empty():
 
 
 @pytest.mark.parametrize("path", SCAN, ids=lambda p: os.path.basename(p))
+def test_no_local_shadowing_of_t(path):
+    """`t` 是模組層級的查表函式。函式內任何一處指派 `t = ...`（含 for、
+    with as、except as、參數名）都會讓整個函式的 `t` 變成區域變數，該函式裡
+    **在指派之前**的每個 t("...") 呼叫都會 UnboundLocalError。
+
+    這種 bug 只在那條 code path 真的跑到時才炸，靜態看程式碼完全正常——
+    遷移當下就踩過一次（_stop_recording 的 `t = threading.Thread(...)`）。
+    """
+    with open(path, encoding="utf-8") as f:
+        tree = ast.parse(f.read())
+    bad = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        args = fn.args
+        for a in (list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
+                  + [args.vararg, args.kwarg]):
+            if a is not None and a.arg == "t":
+                bad.append((fn.lineno, "參數"))
+        for n in ast.walk(fn):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id == "t":
+                bad.append((n.lineno, "指派"))
+    assert not bad, (f"{os.path.basename(path)} 有 {len(bad)} 處把 t 變成區域名稱："
+                     + "; ".join(f"行 {ln}({kind})" for ln, kind in bad[:5]))
+
+
+@pytest.mark.parametrize("path", SCAN, ids=lambda p: os.path.basename(p))
 def test_no_hardcoded_cjk(path):
     """介面文字一律走 t()。真的需要豁免就加進 ALLOWLIST，但要寫清楚理由。"""
     hits = _hardcoded_cjk(path)
