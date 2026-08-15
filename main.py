@@ -117,7 +117,7 @@ def get_loopback_device(p: pyaudio.PyAudio, preferred_output_name: str = None) -
     try:
         wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     except OSError:
-        raise RuntimeError("找不到 WASAPI 音訊裝置，請確認音效卡驅動正常。")
+        raise RuntimeError(t("err.no_wasapi"))
 
     if preferred_output_name:
         for loopback in p.get_loopback_device_info_generator():
@@ -590,7 +590,7 @@ class MeetingRecorderApp:
             except Exception as e:
                 try:
                     win.after(0, lambda: mic_status.config(
-                        text=f"錯誤：{e}", foreground="red"))
+                        text=t("gui.msg.error_prefix", err=e), foreground="red"))
                 except Exception:
                     pass
             finally:
@@ -691,7 +691,7 @@ class MeetingRecorderApp:
             except Exception as e:
                 try:
                     win.after(0, lambda: sys_status.config(
-                        text=f"錯誤：{e}", foreground="red"))
+                        text=t("gui.msg.error_prefix", err=e), foreground="red"))
                 except Exception:
                     pass
             finally:
@@ -978,8 +978,8 @@ class MeetingRecorderApp:
 
     def _discard_recording(self):
         confirmed = messagebox.askyesno(
-            "確認停止不儲存",
-            "確定要停止錄音並捨棄所有資料？\n此操作無法復原。",
+            t("gui.dlg.discard.title"),
+            t("gui.dlg.discard.body"),
             icon="warning",
             parent=self.root,
         )
@@ -1155,7 +1155,7 @@ class MeetingRecorderApp:
                         pass
                     self._record_stream = None
                     self.msg_queue.put(("vu_system", 0.0))
-                    self.msg_queue.put(("warning", "系統音訊裝置中斷，嘗試重新連線（最多等 30 秒）..."))
+                    self.msg_queue.put(("warning", t("gui.msg.sys_device_lost")))
 
                     recovered = False
                     for _ in range(30):
@@ -1169,7 +1169,7 @@ class MeetingRecorderApp:
                             )
                             self._record_stream = stream
                             recovered = True
-                            self.msg_queue.put(("warning", "系統音訊裝置已重新連線，錄音繼續"))
+                            self.msg_queue.put(("warning", t("gui.msg.sys_device_back")))
                             break
                         except Exception:
                             continue
@@ -1178,7 +1178,7 @@ class MeetingRecorderApp:
                         if self.is_recording:
                             _write_log(LOG_TEXT["sys_device_timeout"], "ERROR")
                             self.msg_queue.put(("device_failed",
-                                "系統音訊裝置無法恢復（逾時 30 秒），自動儲存已錄部分。"))
+                                t("gui.msg.sys_device_failed")))
                         break
 
             try:
@@ -1239,8 +1239,7 @@ class MeetingRecorderApp:
 
         # 找不到對應 MME 裝置，fallback 到 MME 預設輸入並警告使用者
         self.msg_queue.put(("warning",
-            f"找不到麥克風「{wasapi_name}」對應的 MME 裝置，"
-            f"改用 MME 預設輸入。實際錄音裝置可能與所選不符，請至裝置設定確認。"))
+            t("gui.msg.mme_not_found", name=wasapi_name)))
         default_idx = mme_info.get("defaultInputDevice", -1)
         return default_idx if default_idx >= 0 else None
 
@@ -1332,7 +1331,7 @@ class MeetingRecorderApp:
                     self._mic_stream = None
                     self.msg_queue.put(("vu_mic", 0.0))
                     self.msg_queue.put(("mic_offline", True))
-                    self.msg_queue.put(("warning", "麥克風裝置中斷，嘗試重新連線（最多等 30 秒）..."))
+                    self.msg_queue.put(("warning", t("gui.msg.mic_device_lost")))
 
                     recovered = False
                     for _ in range(30):
@@ -1352,7 +1351,7 @@ class MeetingRecorderApp:
                             self._mic_stream = stream
                             recovered = True
                             self.msg_queue.put(("mic_offline", False))
-                            self.msg_queue.put(("warning", "麥克風裝置已重新連線，錄音繼續"))
+                            self.msg_queue.put(("warning", t("gui.msg.mic_device_back")))
                             break
                         except Exception:
                             continue
@@ -1362,7 +1361,7 @@ class MeetingRecorderApp:
                             level = "warning" if self._save_mode == "both" else "error"
                             _write_log(LOG_TEXT["mic_device_timeout"], "ERROR")
                             self.msg_queue.put((level,
-                                "麥克風裝置無法恢復（逾時 30 秒），麥克風錄音已停止"))
+                                t("gui.msg.mic_device_failed")))
                         break
 
             try:
@@ -1377,7 +1376,7 @@ class MeetingRecorderApp:
             # Mode "mic"：視為致命錯誤
             level = "warning" if self._save_mode == "both" else "error"
             _write_log(LOG_TEXT["thread_error_mic"].format(exc=type(e).__name__), "ERROR")
-            self.msg_queue.put((level, f"麥克風錯誤：{e}"))
+            self.msg_queue.put((level, t("gui.msg.mic_error", err=e)))
 
     # ---- 混音 ----
     def _mix_pcm(self, sys_data: bytes, sys_ch: int,
@@ -1552,7 +1551,7 @@ class MeetingRecorderApp:
             except Exception:
                 pass
         else:
-            self.msg_queue.put(("warning", "錄音執行緒未正常結束，PyAudio 資源暫時保留（重啟程式可釋放）"))
+            self.msg_queue.put(("warning", t("gui.msg.threads_stuck")))
 
         try:
             mode = self._save_mode  # 已在主執行緒鎖定，不從 tkinter StringVar 讀取
@@ -1564,7 +1563,7 @@ class MeetingRecorderApp:
 
             if mode == "system":
                 if not self.record_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何音訊"))
+                    self.msg_queue.put(("error", t("gui.msg.no_audio")))
                     return
                 pcm_data    = b"".join(self.record_frames)
                 channels    = self.record_channels
@@ -1572,7 +1571,7 @@ class MeetingRecorderApp:
 
             elif mode == "mic":
                 if not self.mic_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何音訊（麥克風）"))
+                    self.msg_queue.put(("error", t("gui.msg.no_audio_mic")))
                     return
                 pcm_data    = b"".join(self.mic_frames)
                 channels    = self.record_mic_channels
@@ -1580,12 +1579,12 @@ class MeetingRecorderApp:
 
             else:  # "both"
                 if not self.record_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何系統音訊"))
+                    self.msg_queue.put(("error", t("gui.msg.no_audio_system")))
                     return
 
                 if not self.mic_frames:
                     # 麥克風無資料，退回純系統音訊
-                    self.msg_queue.put(("warning", "麥克風無資料，改以「電腦聲音」模式儲存"))
+                    self.msg_queue.put(("warning", t("gui.msg.mic_no_data")))
                     mp3_data = self._encode_to_mp3(
                         b"".join(self.record_frames),
                         self.record_channels, self.record_sample_rate,
@@ -1627,9 +1626,10 @@ class MeetingRecorderApp:
                 # ---- 合併音軌 ----
                 if output_mode in ("merge", "both"):
                     if self.record_mic_rate != self.record_sample_rate:
-                        self.msg_queue.put(("warning",
-                            f"麥克風取樣率（{self.record_mic_rate} Hz）與系統音訊"
-                            f"（{self.record_sample_rate} Hz）不一致，麥克風聲音可能略有偏差"))
+                        self.msg_queue.put(("warning", t(
+                            "gui.msg.rate_mismatch",
+                            mic_rate=self.record_mic_rate,
+                            sys_rate=self.record_sample_rate)))
 
                     self.msg_queue.put(("status", t("gui.status.mixing")))
                     sys_pcm = b"".join(sys_frames_snap)
@@ -1656,7 +1656,7 @@ class MeetingRecorderApp:
                     saved_paths.append(self._save_file(merged_mp3, base_name))
 
                 if not saved_paths:
-                    self.msg_queue.put(("error", f"未知的輸出模式：{output_mode}"))
+                    self.msg_queue.put(("error", t("gui.msg.unknown_output_mode", mode=output_mode)))
                     return
                 self.msg_queue.put(("saved", saved_paths))
                 return
@@ -1737,8 +1737,8 @@ class MeetingRecorderApp:
         """
         if self._is_saving:
             proceed = messagebox.askyesno(
-                "檔案處理中",
-                "檔案處理中，若現在關閉將遺失處理進度，確定要關閉嗎？"
+                t("gui.dlg.closing.title"),
+                t("gui.dlg.closing.body")
             )
             if not proceed:
                 return
