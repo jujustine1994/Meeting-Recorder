@@ -57,6 +57,31 @@
   `msg_queue` 訊息類型、存檔後綴 `_system` / `_mic`、log 全部內容。
   判定理由見 `ARCHITECTURE.md`
 - 新增：`.gitignore` 加入 `config.json`
+- **修正（遷移當場炸出的真 bug，commit `b82a6d0`）**：`_stop_recording()` 裡既有的
+  `t = threading.Thread(...)` 在 `from i18n import t` 之後變成致命問題——
+  函式內任一處指派 `t` 就會讓整個函式的 `t` 變成區域變數，
+  函式開頭的 `t("gui.btn.saving")` / `t("gui.status.encoding")` 會在使用者按
+  「停止並儲存」時直接 `UnboundLocalError`，等於**停止儲存整條路徑掛掉**。
+  已改名為 `save_thread`（`main.py` 第 1084–1091 行）。
+  這類 bug 只在那條 code path 真的跑到時才炸，靜態看程式碼完全正常。
+  已加 `tests/test_i18n.py::test_no_local_shadowing_of_t`（AST 掃描）永久釘住。
+  同 commit 另補：GUI smoke test 加掃 `tk.Text` / `ScrolledText` 內容
+  （`widget.get("1.0","end")`）——「錄音記錄」區的開場提示整條住在 Text 裡，
+  `cget("text")` 掃不到，漏掉那段等於那條字串永遠沒被測試涵蓋。測試 41 → 43 條。
+- 判斷紀錄與待校對譯文（含四語現值對照表）見 `TODO.md` 的「i18n 遷移紀錄」段
+
+### 2026-08-15 — VU meter 除數（`be0fe05`，與 i18n 無關）
+> ⚠ 這個 commit 位在 `feat/i18n` 分支的最底部，但**內容與 i18n 完全無關**。
+> 開分支時工作區本來就帶著這份未提交的改動（使用者自己改的），
+> 為了不讓它跟後續 i18n 的 diff 混在一起，先獨立 commit 保存下來。
+> 要 cherry-pick 或 revert i18n 時，記得這一個不屬於那組。
+- 調整：`_VU_DISPLAY_DIVISOR` 650 → 120（`main.py` 第 75 行）。
+  650 過鬆導致大聲僅約 10%，依實測回推調整，目標大聲落在 50~60%
+- 調整：`tests/test_audio_processing.py` 兩條斷言（共 11 行）改綁 `_VU_DISPLAY_DIVISOR`
+  常數而非寫死數字（除數歷史上已改過 80→130→650→120，寫死等於每調一次紅兩條測試）；
+  `test_theoretical_max_rms_does_not_clamp_at_current_divisor` 改名為
+  `test_theoretical_max_rms_clamps_to_100`——除數 120 下理論最大 RMS 一定撞 clamp 上限，
+  原本的斷言（不 clamp）在新除數下已不成立
 
 ### 2026-07-23
 - 調整：VU meter 除數 650→120——實測回報 650 過鬆導致大聲僅約 10%，回推調回 120，目標讓大聲落在 50~60%（見 TODO 待驗證）
