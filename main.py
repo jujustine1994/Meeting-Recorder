@@ -12,6 +12,8 @@ import os
 import array
 import math
 import struct
+import subprocess
+import sys
 import threading
 import datetime
 import time
@@ -21,6 +23,10 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 
 import pyaudiowpatch as pyaudio
 import lameenc
+
+import i18n
+from i18n import t
+from config import CONFIG_PATH, load_config, save_config
 
 
 # ---- 執行紀錄（logs/app.log）----
@@ -168,6 +174,11 @@ class MeetingRecorderApp:
         self.root = root
         self.root.title("Meeting Recorder")
         self.root.resizable(False, False)
+
+        # 語言必須在建任何 widget 之前設好——t() 是建置時查一次表，
+        # 設晚了介面會停在預設語言。
+        self.cfg = load_config(CONFIG_PATH)
+        i18n.set_lang(self.cfg.get("language"))
 
         # 錄音狀態
         self.is_recording = False
@@ -749,9 +760,12 @@ class MeetingRecorderApp:
         cap_var    = tk.IntVar(value=self.eq_gain_cap.get())
         filter_var = tk.BooleanVar(value=self.eq_filter_silence.get())
 
+        # ---- 語言（最上方一列）----
+        self._build_language_row(win)
+
         # ---- 音質 ----
         frame_quality = ttk.LabelFrame(win, text=" 音質 ", padding=10)
-        frame_quality.grid(row=0, column=0, sticky="ew", **pad)
+        frame_quality.grid(row=1, column=0, sticky="ew", **pad)
         for label, val in [("128 kbps（標準，一般會議適用）", 128),
                             ("192 kbps（較好音質）",           192),
                             ("320 kbps（最高，後製 / Podcast）", 320)]:
@@ -761,7 +775,7 @@ class MeetingRecorderApp:
         # ---- 混音設定 ----
         frame_mix = ttk.LabelFrame(
             win, text=" 混音設定（僅「系統＋麥克風」有效） ", padding=10)
-        frame_mix.grid(row=1, column=0, sticky="ew", **pad)
+        frame_mix.grid(row=2, column=0, sticky="ew", **pad)
 
         ttk.Checkbutton(
             frame_mix,
@@ -805,19 +819,86 @@ class MeetingRecorderApp:
 
         # ---- 確認 / 取消 ----
         frame_btns = tk.Frame(win)
-        frame_btns.grid(row=2, column=0, pady=12)
+        frame_btns.grid(row=3, column=0, pady=12)
 
         def confirm():
             self.bit_rate.set(br_var.get())
             self.equalize_enabled.set(eq_var.get())
             self.eq_gain_cap.set(max(1, min(16, cap_var.get())))
             self.eq_filter_silence.set(filter_var.get())
+
+            new_lang = self._selected_lang_code()
+            lang_changed = new_lang != self._lang_saved_code
+            self.cfg["language"] = new_lang
+            save_config(self.cfg, CONFIG_PATH)
+
             win.destroy()
+            # 只有語言真的變更才打擾使用者——改位元率不該跳重啟視窗
+            if lang_changed:
+                self._prompt_restart_for_language()
 
         ttk.Button(frame_btns, text="確認", command=confirm).pack(side="left", padx=8)
         ttk.Button(frame_btns, text="取消", command=win.destroy).pack(side="left")
         win.protocol("WM_DELETE_WINDOW", win.destroy)
         win.columnconfigure(0, weight=1)
+
+    # ---- 語言選擇 ----
+    def _build_language_row(self, popup):
+        """進階設定視窗最上方的語言列。
+
+        選項由 i18n.LANGUAGES 動態生成，新增語言時這裡一個字都不必改。
+        標籤固定英文 "Language:"，選項用各語言自稱——任何語言下都認得出來。
+        """
+        lang_frame = ttk.Frame(popup)
+        lang_frame.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+        ttk.Label(lang_frame, text="Language:").pack(side="left", padx=(0, 8))
+
+        self._lang_choices = i18n.available_languages()
+        # ⚠ 讀 config 不讀 i18n.get_lang()：set_lang() 只在 __init__ 跑一次，
+        # 使用者選了新語言但按「稍後」不重啟時，runtime 語言還是舊的。用 runtime
+        # 值當基準的話，下次開設定按確認會把他的選擇默默寫回去。
+        saved = self.cfg.get("language", "")
+        self._lang_saved_code = saved if i18n.is_supported(saved) else i18n.DEFAULT_LANG
+        names = [name for _, name in self._lang_choices]
+        current = next((n for c, n in self._lang_choices if c == self._lang_saved_code),
+                       names[0])
+        self.settings_lang_var = tk.StringVar(value=current)
+        ttk.Combobox(lang_frame, textvariable=self.settings_lang_var,
+                     values=names, width=14, state="readonly").pack(side="left")
+
+    def _selected_lang_code(self) -> str:
+        """把下拉選單顯示的名稱換回代號。取不到就維持原設定，不亂改。"""
+        chosen = self.settings_lang_var.get()
+        for code, name in self._lang_choices:
+            if name == chosen:
+                return code
+        return self._lang_saved_code
+
+    def _prompt_restart_for_language(self):
+        """語言變更後問是否重啟。
+
+        視窗全英文：此刻介面還是舊語言、使用者要的是新語言，用任一方都尷尬，
+        英文最中立。
+        """
+        if messagebox.askyesno(
+            "Language Changed",
+            "Restart the app to apply the new language.\n\nRestart now?",
+            parent=self.root,
+        ):
+            self._restart_app()
+
+    def _restart_app(self):
+        """起一個新行程再關掉自己。
+
+        不用 os.execv：Windows 上它會就地覆寫當前行程，tkinter 還沒釋放的視窗
+        handle 可能殘留，看起來像關不掉的殭屍視窗。
+        """
+        try:
+            subprocess.Popen([sys.executable, *sys.argv], close_fds=True)
+        except OSError:
+            # 起不了新行程就什麼都不做——使用者下次自己開一樣會生效
+            return
+        self.root.destroy()
 
     def _change_folder(self):
         folder = filedialog.askdirectory(
@@ -1793,10 +1874,60 @@ class MeetingRecorderApp:
         self.root.after(100, self._poll_queue)
 
 
+# ---- 首次啟動選語言 ----
+def _pick_language_on_first_run(root: tk.Tk) -> None:
+    """首次啟動時問一次語言，選完寫進 config.json，之後不再出現。
+
+    視窗刻意**不翻譯**：這時候還不知道使用者要哪個語言，用任一種當說明都
+    在賭。只有一個英文抬頭，其餘全是各語言的自稱，看得懂哪個就點哪個。
+
+    直接關掉視窗＝接受第一個選項並**照樣存檔**——需求是「選完就記住不要再
+    跳」，關掉還一直跳才是煩人。選錯了在進階設定隨時能改。
+    """
+    cfg = load_config(CONFIG_PATH)
+    if i18n.is_supported(cfg.get("language", "")):
+        return                      # 選過了，直接進主畫面
+
+    choices = i18n.available_languages()
+    chosen = {"code": choices[0][0]}
+
+    dlg = tk.Toplevel(root)
+    dlg.title("Language")
+    dlg.resizable(False, False)
+    dlg.attributes("-topmost", True)
+
+    ttk.Label(dlg, text="Select your language",
+              font=("", 12, "bold")).pack(padx=28, pady=(20, 4))
+    ttk.Label(dlg, text="You can change this later in Advanced Settings.",
+              foreground="#555555").pack(padx=28, pady=(0, 14))
+
+    def _choose(code: str) -> None:
+        chosen["code"] = code
+        dlg.destroy()
+
+    for code, name in choices:
+        ttk.Button(dlg, text=name, width=20,
+                   command=lambda c=code: _choose(c)).pack(padx=28, pady=3)
+    ttk.Frame(dlg, height=10).pack()
+
+    dlg.update_idletasks()
+    x = root.winfo_rootx() + (root.winfo_width() - dlg.winfo_width()) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - dlg.winfo_height()) // 3
+    dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    dlg.grab_set()
+    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)   # 關掉＝用預設值，照樣存
+    root.wait_window(dlg)
+
+    cfg["language"] = chosen["code"]
+    save_config(cfg, CONFIG_PATH)
+
+
 # ---- 入口 ----
 def main():
     show_cth_banner()
     root = tk.Tk()
+    _pick_language_on_first_run(root)
     MeetingRecorderApp(root)
     root.mainloop()
 
