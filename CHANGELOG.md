@@ -29,6 +29,7 @@
 - [x] 系統音訊裝置不可恢復時自動儲存已錄部分（不遺失資料）
 - [x] 麥克風斷線即時警示標籤（VU meter 旁紅字，與「靜音」區分）
 - [x] 合併音訊混音補零（mic 中途斷線不截短 merged MP3）
+- [x] 多語言介面（繁體中文 / 简体中文 / English / 日本語，重開生效）
 
 ### 未完成 / 待規劃
 - [ ] 支援選擇錄音裝置（多音效卡環境）
@@ -37,6 +38,53 @@
 ---
 
 ## 更新記錄
+
+### 2026-08-15 — 多語言（i18n）
+- 新增：介面支援繁體中文 / 简体中文 / English / 日本語，共 108 條字串 × 4 語
+- 新增：`i18n.py`（查表核心 `t()`）、`config.py`（`config.json` 讀寫）、
+  `locales/`（四個語言檔）、`logtext.py`（log 訊息，固定繁中）
+- 新增：首次啟動跳一次語言選擇視窗（視窗本身不翻譯，全是各語言自稱），
+  選完寫進 `config.json`，之後不再詢問；直接關掉＝接受第一個選項並照樣存
+- 新增：進階設定最上方 `Language:` 下拉選單，語言變更才跳英文重啟提示
+- 調整：`main.py` 的 108 條寫死字面改走 `t()`，用 AST 逐節點以 utf-8
+  位元組偏移取代；f-string 碎片整句重組成具名 placeholder
+- 調整：`logs/app.log` 的 9 條訊息抽進 `logtext.py`，內容固定繁中不跟介面走
+- 新增：16 條防退化測試（25 → 41），含四語 GUI 建置 smoke test、
+  四語 key 集合／placeholder 一致性、不得寫死中日文、首次啟動語言流程
+- 驗證：繁中模式下主視窗 / 模式說明 / 裝置測試三個畫面的 widget 文字與
+  改動前**逐字相同**；進階設定僅多出新加的語言列
+- **不翻的字串**（資料，非介面文字）：錄音模式與輸出模式代號、
+  `msg_queue` 訊息類型、存檔後綴 `_system` / `_mic`、log 全部內容。
+  判定理由見 `ARCHITECTURE.md`
+- 新增：`.gitignore` 加入 `config.json`
+- **修正（遷移當場炸出的真 bug，commit `b82a6d0`）**：`_stop_recording()` 裡既有的
+  `t = threading.Thread(...)` 在 `from i18n import t` 之後變成致命問題——
+  函式內任一處指派 `t` 就會讓整個函式的 `t` 變成區域變數，
+  函式開頭的 `t("gui.btn.saving")` / `t("gui.status.encoding")` 會在使用者按
+  「停止並儲存」時直接 `UnboundLocalError`，等於**停止儲存整條路徑掛掉**。
+  已改名為 `save_thread`（`main.py` 第 1084–1091 行）。
+  這類 bug 只在那條 code path 真的跑到時才炸，靜態看程式碼完全正常。
+  已加 `tests/test_i18n.py::test_no_local_shadowing_of_t`（AST 掃描）永久釘住。
+  同 commit 另補：GUI smoke test 加掃 `tk.Text` / `ScrolledText` 內容
+  （`widget.get("1.0","end")`）——「錄音記錄」區的開場提示整條住在 Text 裡，
+  `cget("text")` 掃不到，漏掉那段等於那條字串永遠沒被測試涵蓋。測試 41 → 43 條。
+- 判斷紀錄與待校對譯文（含四語現值對照表）見 `TODO.md` 的「i18n 遷移紀錄」段
+
+### 2026-08-15 — VU meter 除數（`be0fe05`，與 i18n 無關）
+> ⚠ 這個 commit 位在 `feat/i18n` 分支的最底部，但**內容與 i18n 完全無關**。
+> 開分支時工作區本來就帶著這份未提交的改動（使用者自己改的），
+> 為了不讓它跟後續 i18n 的 diff 混在一起，先獨立 commit 保存下來。
+> 要 cherry-pick 或 revert i18n 時，記得這一個不屬於那組。
+- 調整：`_VU_DISPLAY_DIVISOR` 650 → 120（`main.py` 第 75 行）。
+  650 過鬆導致大聲僅約 10%，依實測回推調整，目標大聲落在 50~60%
+- 調整：`tests/test_audio_processing.py` 兩條斷言（共 11 行）改綁 `_VU_DISPLAY_DIVISOR`
+  常數而非寫死數字（除數歷史上已改過 80→130→650→120，寫死等於每調一次紅兩條測試）；
+  `test_theoretical_max_rms_does_not_clamp_at_current_divisor` 改名為
+  `test_theoretical_max_rms_clamps_to_100`——除數 120 下理論最大 RMS 一定撞 clamp 上限，
+  原本的斷言（不 clamp）在新除數下已不成立
+
+### 2026-07-23
+- 調整：VU meter 除數 650→120——實測回報 650 過鬆導致大聲僅約 10%，回推調回 120，目標讓大聲落在 50~60%（見 TODO 待驗證）
 
 ### 2026-07-17 — 導入執行紀錄（log）規範
 - 新增：`logs/app.log`——launcher.ps1 與 main.py 共用同一檔案，靠標籤區分來源，事後可回查任務失敗原因

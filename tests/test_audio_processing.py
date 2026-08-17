@@ -19,6 +19,7 @@ from main import (
     _compute_peak,
     _is_clipping,
     _CLIP_PEAK_THRESHOLD,
+    _VU_DISPLAY_DIVISOR,
 )
 
 
@@ -135,12 +136,16 @@ class TestRmsToDisplayPct(unittest.TestCase):
         self.assertEqual(_rms_to_display_pct(0.0), 0.0)
 
     def test_rms_scales_with_divisor(self):
-        self.assertAlmostEqual(_rms_to_display_pct(13000.0), 20.0, places=1)
-        self.assertAlmostEqual(_rms_to_display_pct(32500.0), 50.0, places=1)
+        # 綁除數常數而非寫死數字：除數是會被實測回報反覆調整的參數，
+        # 寫死就是每調一次紅兩條測試（歷史上 80→130→650→120）
+        self.assertAlmostEqual(
+            _rms_to_display_pct(_VU_DISPLAY_DIVISOR * 20.0), 20.0, places=1)
+        self.assertAlmostEqual(
+            _rms_to_display_pct(_VU_DISPLAY_DIVISOR * 50.0), 50.0, places=1)
 
-    def test_theoretical_max_rms_does_not_clamp_at_current_divisor(self):
-        # 除數 650 下，Int16 理論最大 RMS（32767）換算約 50%，不會撞到 clamp 上限
-        self.assertAlmostEqual(_rms_to_display_pct(32767.0), 32767.0 / 650, places=1)
+    def test_theoretical_max_rms_clamps_to_100(self):
+        # 除數 120 下，Int16 理論最大 RMS（32767）遠超 100%，會撞到 clamp 上限
+        self.assertEqual(_rms_to_display_pct(32767.0), 100.0)
 
     def test_rms_exceeding_divisor_range_clamped_to_100(self):
         self.assertEqual(_rms_to_display_pct(100000.0), 100.0)

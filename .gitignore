@@ -5,3 +5,4 @@ __pycache__/
 logs/
 .env
 *.mp3
+config.json

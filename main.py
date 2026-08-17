@@ -12,6 +12,8 @@ import os
 import array
 import math
 import struct
+import subprocess
+import sys
 import threading
 import datetime
 import time
@@ -21,6 +23,11 @@ from tkinter import ttk, filedialog, scrolledtext, messagebox
 
 import pyaudiowpatch as pyaudio
 import lameenc
+
+import i18n
+from i18n import t
+from config import CONFIG_PATH, load_config, save_config
+from logtext import LOG_TEXT
 
 
 # ---- 執行紀錄（logs/app.log）----
@@ -72,7 +79,7 @@ _MIX_WEIGHT_SYSTEM      = 0.6    # 系統音軌混音權重（兩軌混音時）
 _MIX_WEIGHT_MIC         = 0.6    # 麥克風混音權重
 _SILENCE_RMS_THRESHOLD  = 100    # 靜音判斷 RMS 閾值（Int16 0~32767）
 _SILENCE_WARNING_SECS   = 10     # 連續靜音幾秒後顯示警告
-_VU_DISPLAY_DIVISOR     = 650    # VU meter 顯示除數：依實測反饋大幅調鬆，避免小音量就衝到高百分比
+_VU_DISPLAY_DIVISOR     = 120    # VU meter 顯示除數：650 過鬆導致大聲僅約 10%，依實測回推調回 120，目標大聲落在 50~60%
 _CLIP_PEAK_THRESHOLD    = int(32767 * 0.96)  # 峰值達此值視為接近爆音（約 31456，調高避免誤判）
 _CLIP_WARNING_HOLD_SECS = 1.5    # 爆音警示保持顯示的秒數，避免瞬間峰值一閃即逝
 
@@ -110,7 +117,7 @@ def get_loopback_device(p: pyaudio.PyAudio, preferred_output_name: str = None) -
     try:
         wasapi_info = p.get_host_api_info_by_type(pyaudio.paWASAPI)
     except OSError:
-        raise RuntimeError("找不到 WASAPI 音訊裝置，請確認音效卡驅動正常。")
+        raise RuntimeError(t("err.no_wasapi"))
 
     if preferred_output_name:
         for loopback in p.get_loopback_device_info_generator():
@@ -168,6 +175,11 @@ class MeetingRecorderApp:
         self.root = root
         self.root.title("Meeting Recorder")
         self.root.resizable(False, False)
+
+        # 語言必須在建任何 widget 之前設好——t() 是建置時查一次表，
+        # 設晚了介面會停在預設語言。
+        self.cfg = load_config(CONFIG_PATH)
+        i18n.set_lang(self.cfg.get("language"))
 
         # 錄音狀態
         self.is_recording = False
@@ -227,7 +239,7 @@ class MeetingRecorderApp:
         pad = {"padx": 14, "pady": 6}
 
         # row=0  儲存位置
-        frame_folder = ttk.LabelFrame(self.root, text=" 儲存位置 ", padding=8)
+        frame_folder = ttk.LabelFrame(self.root, text=t("gui.frame.folder"), padding=8)
         frame_folder.grid(row=0, column=0, sticky="ew", **pad)
         frame_folder.columnconfigure(0, weight=1)
 
@@ -236,17 +248,17 @@ class MeetingRecorderApp:
             state="readonly", width=44
         ).grid(row=0, column=0, sticky="ew", padx=(0, 8))
         ttk.Button(
-            frame_folder, text="變更", command=self._change_folder
+            frame_folder, text=t("gui.btn.change_folder"), command=self._change_folder
         ).grid(row=0, column=1)
 
         # row=1  錄音模式
-        frame_mode = ttk.LabelFrame(self.root, text=" 錄音模式 ", padding=8)
+        frame_mode = ttk.LabelFrame(self.root, text=t("gui.frame.mode"), padding=8)
         frame_mode.grid(row=1, column=0, sticky="ew", **pad)
 
         modes = [
-            ("電腦聲音",      "system"),
-            ("麥克風",        "mic"),
-            ("系統 + 麥克風", "both"),
+            (t("gui.mode.system"),      "system"),
+            (t("gui.mode.mic"),        "mic"),
+            (t("gui.mode.both"), "both"),
         ]
         self._mode_radios = []
         for text, value in modes:
@@ -266,11 +278,11 @@ class MeetingRecorderApp:
         self._frame_output_inline = tk.Frame(frame_mode)
         self._frame_output_inline.pack(fill="x", pady=(8, 0))
         ttk.Label(
-            self._frame_output_inline, text="輸出格式：",
+            self._frame_output_inline, text=t("gui.lbl.output_format"),
             font=("", 9), foreground="#555555",
         ).pack(anchor="w")
         self._output_radios = []
-        for text, val in [("合併一軌", "merge"), ("獨立兩軌", "separate"), ("兩個都要", "both")]:
+        for text, val in [(t("gui.output.merge"), "merge"), (t("gui.output.separate"), "separate"), (t("gui.output.both"), "both")]:
             rb = ttk.Radiobutton(
                 self._frame_output_inline, text=text,
                 variable=self.output_mode, value=val,
@@ -287,7 +299,7 @@ class MeetingRecorderApp:
         _on_mode_change()  # 設定初始 disabled 狀態
 
         # row=2  檔案名稱
-        frame_name = ttk.LabelFrame(self.root, text=" 檔案名稱 ", padding=8)
+        frame_name = ttk.LabelFrame(self.root, text=t("gui.frame.filename"), padding=8)
         frame_name.grid(row=2, column=0, sticky="ew", **pad)
         frame_name.columnconfigure(0, weight=1)
 
@@ -299,7 +311,7 @@ class MeetingRecorderApp:
             frame_name, text=".mp3", foreground="gray"
         ).grid(row=0, column=1, padx=(4, 0))
         ttk.Label(
-            frame_name, text="存檔前填好名稱，不填則自動用時間戳記命名",
+            frame_name, text=t("gui.lbl.filename_hint"),
             foreground="gray", font=("", 8)
         ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(4, 0))
 
@@ -308,7 +320,7 @@ class MeetingRecorderApp:
         frame_btn.grid(row=3, column=0, pady=20)
 
         self.btn_record = ttk.Button(
-            frame_btn, text="⏺  開始錄音",
+            frame_btn, text=t("gui.btn.record_start"),
             command=self._toggle_record, width=22
         )
         self.btn_record.pack(ipady=8)
@@ -317,13 +329,13 @@ class MeetingRecorderApp:
         self._secondary_row = tk.Frame(frame_btn)
 
         self.btn_pause = ttk.Button(
-            self._secondary_row, text="⏸  暫停",
+            self._secondary_row, text=t("gui.btn.pause"),
             command=self._pause_recording, width=12
         )
         self.btn_pause.pack(side="left", ipady=4)
 
         self.btn_discard = ttk.Button(
-            self._secondary_row, text="🗑  停止不儲存",
+            self._secondary_row, text=t("gui.btn.discard"),
             command=self._discard_recording, width=14
         )
         self.btn_discard.pack(side="left", ipady=4, padx=(8, 0))
@@ -335,7 +347,7 @@ class MeetingRecorderApp:
         self.timer_label.pack(pady=(10, 0))
 
         self.status_label = ttk.Label(
-            frame_btn, text="等待開始錄音...", foreground="gray"
+            frame_btn, text=t("gui.status.idle"), foreground="gray"
         )
         self.status_label.pack(pady=(4, 0))
 
@@ -345,7 +357,7 @@ class MeetingRecorderApp:
 
         ttk.Style().configure("Clip.Horizontal.TProgressbar", background="red")
 
-        tk.Label(vu_frame, text="系統音訊", width=8, anchor="w",
+        tk.Label(vu_frame, text=t("gui.lbl.vu_system"), width=8, anchor="w",
                  font=("", 9)).grid(row=0, column=0, padx=(0, 6))
         self.vu_system_pb = ttk.Progressbar(vu_frame, variable=self.vu_system_var,
                         maximum=100, length=200)
@@ -354,7 +366,7 @@ class MeetingRecorderApp:
                                         foreground="gray", font=("Consolas", 9))
         self.vu_system_pct.grid(row=0, column=2, padx=(4, 0))
 
-        tk.Label(vu_frame, text="麥克風", width=8, anchor="w",
+        tk.Label(vu_frame, text=t("gui.mode.mic"), width=8, anchor="w",
                  font=("", 9)).grid(row=1, column=0, padx=(0, 6), pady=(4, 0))
         self.vu_mic_pb = ttk.Progressbar(vu_frame, variable=self.vu_mic_var,
                         maximum=100, length=200)
@@ -373,23 +385,22 @@ class MeetingRecorderApp:
         # 裝置設定 + 進階設定 雙按鈕列
         btn_row = tk.Frame(frame_btn)
         btn_row.pack(pady=(12, 0))
-        ttk.Button(btn_row, text="🔧 裝置設定與測試",
+        ttk.Button(btn_row, text=t("gui.btn.device_test"),
                    command=self._show_device_test).pack(side="left", padx=(0, 8))
-        ttk.Button(btn_row, text="⚙ 進階設定",
+        ttk.Button(btn_row, text=t("gui.btn.advanced"),
                    command=self._show_advanced_settings).pack(side="left")
 
         # row=4  靜音警告橫幅（預設隱藏，偵測到連續靜音才顯示）
         self.silence_banner = tk.Frame(self.root, background="#FFA500", padx=12, pady=8)
         tk.Label(
             self.silence_banner,
-            text="⚠  偵測到超過 10 秒沒有聲音，請確認：\n"
-                 "系統是否靜音？播放裝置是否正確？",
+            text=t("gui.lbl.silence_banner"),
             background="#FFA500", foreground="white",
             font=("", 10, "bold"), justify="left"
         ).pack(anchor="w")
 
         # row=5  錄音記錄
-        frame_log = ttk.LabelFrame(self.root, text=" 錄音記錄 ", padding=8)
+        frame_log = ttk.LabelFrame(self.root, text=t("gui.frame.log"), padding=8)
         frame_log.grid(row=5, column=0, sticky="ew", padx=14, pady=(0, 14))
 
         self.log_text = scrolledtext.ScrolledText(
@@ -399,38 +410,41 @@ class MeetingRecorderApp:
         self.log_text.pack(fill="x")
 
         self.root.columnconfigure(0, weight=1)
-        self._log("請確認儲存位置與錄音模式，然後按「開始錄音」。")
+        self._log(t("gui.log.welcome"))
 
     # ---- UI 互動 ----
     def _show_mode_help(self):
         """錄音模式說明彈窗"""
         win = tk.Toplevel(self.root)
-        win.title("錄音模式說明")
+        win.title(t("gui.dlg.mode_help.title"))
         win.resizable(False, False)
         win.grab_set()  # modal，關閉前不能操作主視窗
 
         # 取樣率顯示：錄音後為實際偵測值，錄音前為預設值
-        sys_rate_text  = f"{self.record_sample_rate} Hz  /  {'立體聲' if self.record_channels == 2 else '單聲道'}"
-        mic_rate_text  = f"{self.record_mic_rate} Hz  /  單聲道"
+        sys_rate_text  = t("gui.help.rate_fmt", rate=self.record_sample_rate,
+                           ch=(t("gui.lbl.stereo") if self.record_channels == 2
+                               else t("gui.lbl.mono")))
+        mic_rate_text  = t("gui.help.rate_fmt", rate=self.record_mic_rate,
+                           ch=t("gui.lbl.mono"))
 
         modes_info = [
             (
-                "🖥  電腦聲音",
-                "錄製所有從電腦播放的聲音。\n使用 WASAPI Loopback 技術，靜音狀態下依音效卡而定仍可錄音。",
-                "Teams、Zoom、YouTube、任何會議軟體",
+                t("gui.help.sys_title"),
+                t("gui.help.sys_body"),
+                t("gui.help.sys_use"),
                 sys_rate_text,
             ),
             (
-                "🎙  麥克風",
-                "只錄你說話的聲音，不含電腦播放的內容。",
-                "只需要記錄自己發言的場合",
+                t("gui.help.mic_title"),
+                t("gui.help.mic_body"),
+                t("gui.help.mic_use"),
                 mic_rate_text,
             ),
             (
-                "🔀  系統 + 麥克風",
-                "同時錄製電腦聲音與麥克風。\n可選擇合併一軌、獨立兩軌或兩個都存（在主畫面「輸出格式」選擇）。\n注意：若兩者取樣率不同，麥克風聲音速度可能略有偏差。",
-                "想同時保留會議音訊與自己的旁白",
-                f"系統 {sys_rate_text}  ／  麥克風 {mic_rate_text}",
+                t("gui.help.both_title"),
+                t("gui.help.both_body"),
+                t("gui.help.both_use"),
+                t("gui.help.both_rate", sys=sys_rate_text, mic=mic_rate_text),
             ),
         ]
 
@@ -440,7 +454,7 @@ class MeetingRecorderApp:
 
             # 適用場合：藍色粗體，讓使用者一眼找到選擇依據
             tk.Label(
-                lf, text=f"✦ 適用：{use_case}",
+                lf, text=t("gui.help.applies", use_case=use_case),
                 foreground="#0078D4", font=("", 10, "bold"),
                 justify="left",
             ).grid(row=0, column=0, sticky="w")
@@ -451,17 +465,17 @@ class MeetingRecorderApp:
             ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
             ttk.Label(
-                lf, text=f"取樣率：{rate}",
+                lf, text=t("gui.help.rate", rate=rate),
                 foreground="gray", font=("", 8)
             ).grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         ttk.Label(
             win,
-            text="* 取樣率於首次錄音後更新為實際裝置數值",
+            text=t("gui.help.footnote"),
             foreground="gray", font=("", 8)
         ).grid(row=len(modes_info), column=0, padx=16, sticky="w")
 
-        ttk.Button(win, text="關閉", command=win.destroy).grid(
+        ttk.Button(win, text=t("gui.btn.close"), command=win.destroy).grid(
             row=len(modes_info) + 1, column=0, pady=12
         )
         win.columnconfigure(0, weight=1)
@@ -469,7 +483,7 @@ class MeetingRecorderApp:
     def _show_device_test(self):
         """裝置設定與測試對話框：錄音前確認麥克風與系統音訊是否有訊號"""
         win = tk.Toplevel(self.root)
-        win.title("裝置設定與測試")
+        win.title(t("gui.dlg.device.title"))
         win.resizable(False, False)
         win.grab_set()
         pad = {"padx": 14, "pady": 6}
@@ -478,8 +492,8 @@ class MeetingRecorderApp:
         # PortAudio 會對同一個實體裝置透過 MME / DirectSound / WASAPI 各列一次，
         # 造成下拉選單出現大量重複項目。過濾只保留 WASAPI host API 的裝置即可。
         p_enum = pyaudio.PyAudio()
-        input_devices  = [("系統預設", None)]   # (顯示名稱, device_index)
-        output_devices = [("系統預設", None)]   # (顯示名稱, device_name_for_loopback)
+        input_devices  = [(t("gui.dev.default"), None)]   # (顯示名稱, device_index)
+        output_devices = [(t("gui.dev.default"), None)]   # (顯示名稱, device_name_for_loopback)
         try:
             wasapi_idx = p_enum.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
         except Exception:
@@ -503,13 +517,13 @@ class MeetingRecorderApp:
         sys_running  = [False]
 
         # ===================== 麥克風區塊 =====================
-        frame_mic = ttk.LabelFrame(win, text=" 🎙  輸入裝置（麥克風） ", padding=10)
+        frame_mic = ttk.LabelFrame(win, text=t("gui.dlg.device.mic_frame"), padding=10)
         frame_mic.grid(row=0, column=0, sticky="ew", **pad)
         frame_mic.columnconfigure(0, weight=1)
 
         in_var = tk.StringVar()
         in_var.set(next((d[0] for d in input_devices if d[1] == self.selected_input_idx),
-                        "系統預設"))
+                        t("gui.dev.default")))
         ttk.Combobox(frame_mic, textvariable=in_var,
                      values=[d[0] for d in input_devices],
                      state="readonly", width=42).grid(row=0, column=0, columnspan=2,
@@ -521,12 +535,12 @@ class MeetingRecorderApp:
         mic_pb.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         mic_clip_until  = [0.0]
         mic_clip_active = [False]
-        mic_status = ttk.Label(frame_mic, text="請對著麥克風說話，確認音量指示條有所反應",
+        mic_status = ttk.Label(frame_mic, text=t("gui.dlg.device.mic_hint"),
                                foreground="gray")
         mic_status.grid(row=2, column=0, columnspan=2, sticky="w")
-        btn_mic = ttk.Button(frame_mic, text="▶ 開始測試")
+        btn_mic = ttk.Button(frame_mic, text=t("gui.btn.test_start"))
         btn_mic.grid(row=3, column=0, sticky="w", pady=(8, 0))
-        btn_mic_stop = ttk.Button(frame_mic, text="■ 停止", state="disabled")
+        btn_mic_stop = ttk.Button(frame_mic, text=t("gui.btn.test_stop"), state="disabled")
         btn_mic_stop.grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
         def mic_worker(device_idx):
@@ -576,7 +590,7 @@ class MeetingRecorderApp:
             except Exception as e:
                 try:
                     win.after(0, lambda: mic_status.config(
-                        text=f"錯誤：{e}", foreground="red"))
+                        text=t("gui.msg.error_prefix", err=e), foreground="red"))
                 except Exception:
                     pass
             finally:
@@ -598,26 +612,26 @@ class MeetingRecorderApp:
                 return
             idx = next((d[1] for d in input_devices if d[0] == in_var.get()), None)
             mic_running[0] = True
-            mic_status.config(text="測試中，請對著麥克風說話，確認音量指示條有所反應", foreground="#0078D4")
+            mic_status.config(text=t("gui.dlg.device.mic_testing"), foreground="#0078D4")
             btn_mic.config(state="disabled")
             btn_mic_stop.config(state="normal")
             threading.Thread(target=mic_worker, args=(idx,), daemon=True).start()
 
         def stop_mic_test():
             mic_running[0] = False
-            mic_status.config(text="已停止", foreground="gray")
+            mic_status.config(text=t("gui.status.stopped"), foreground="gray")
 
         btn_mic.config(command=start_mic_test)
         btn_mic_stop.config(command=stop_mic_test)
 
         # ===================== 電腦聲音區塊 =====================
-        frame_sys = ttk.LabelFrame(win, text=" 🖥  電腦聲音（WASAPI Loopback） ", padding=10)
+        frame_sys = ttk.LabelFrame(win, text=t("gui.dlg.device.sys_frame"), padding=10)
         frame_sys.grid(row=1, column=0, sticky="ew", **pad)
         frame_sys.columnconfigure(0, weight=1)
 
         out_var = tk.StringVar()
         out_var.set(next((d[0] for d in output_devices if d[1] == self.selected_output_name),
-                         "系統預設"))
+                         t("gui.dev.default")))
         ttk.Combobox(frame_sys, textvariable=out_var,
                      values=[d[0] for d in output_devices],
                      state="readonly", width=42).grid(row=0, column=0, columnspan=2,
@@ -630,12 +644,12 @@ class MeetingRecorderApp:
         sys_clip_until  = [0.0]
         sys_clip_active = [False]
         sys_status = ttk.Label(frame_sys,
-                               text="請先播放任意音訊（音樂、影片等），再按下開始測試",
+                               text=t("gui.dlg.device.sys_hint"),
                                foreground="gray")
         sys_status.grid(row=2, column=0, columnspan=2, sticky="w")
-        btn_sys = ttk.Button(frame_sys, text="▶ 開始測試")
+        btn_sys = ttk.Button(frame_sys, text=t("gui.btn.test_start"))
         btn_sys.grid(row=3, column=0, sticky="w", pady=(8, 0))
-        btn_sys_stop = ttk.Button(frame_sys, text="■ 停止", state="disabled")
+        btn_sys_stop = ttk.Button(frame_sys, text=t("gui.btn.test_stop"), state="disabled")
         btn_sys_stop.grid(row=3, column=1, sticky="w", padx=(8, 0), pady=(8, 0))
 
         def sys_worker(output_name):
@@ -648,7 +662,7 @@ class MeetingRecorderApp:
             """
             p = pyaudio.PyAudio()
             try:
-                device = get_loopback_device(p, output_name if output_name != "系統預設" else None)
+                device = get_loopback_device(p, output_name if output_name != t("gui.dev.default") else None)
                 ch = min(device["maxInputChannels"] or 2, 2)
                 sr = int(device["defaultSampleRate"])
                 stream = p.open(format=pyaudio.paInt16, channels=ch, rate=sr,
@@ -677,7 +691,7 @@ class MeetingRecorderApp:
             except Exception as e:
                 try:
                     win.after(0, lambda: sys_status.config(
-                        text=f"錯誤：{e}", foreground="red"))
+                        text=t("gui.msg.error_prefix", err=e), foreground="red"))
                 except Exception:
                     pass
             finally:
@@ -700,7 +714,7 @@ class MeetingRecorderApp:
             out_name = out_var.get()
             sys_running[0] = True
             sys_status.config(
-                text="測試中，音量指示條有反應表示系統音訊可正常錄製",
+                text=t("gui.dlg.device.sys_testing"),
                 foreground="#0078D4")
             btn_sys.config(state="disabled")
             btn_sys_stop.config(state="normal")
@@ -708,7 +722,7 @@ class MeetingRecorderApp:
 
         def stop_sys_test():
             sys_running[0] = False
-            sys_status.config(text="已停止", foreground="gray")
+            sys_status.config(text=t("gui.status.stopped"), foreground="gray")
 
         btn_sys.config(command=start_sys_test)
         btn_sys_stop.config(command=stop_sys_test)
@@ -731,14 +745,14 @@ class MeetingRecorderApp:
             sys_running[0] = False
             win.destroy()
 
-        ttk.Button(frame_btns, text="確認選擇", command=confirm).pack(side="left", padx=8)
-        ttk.Button(frame_btns, text="取消",     command=on_close).pack(side="left")
+        ttk.Button(frame_btns, text=t("gui.btn.confirm_select"), command=confirm).pack(side="left", padx=8)
+        ttk.Button(frame_btns, text=t("gui.btn.cancel"),     command=on_close).pack(side="left")
         win.protocol("WM_DELETE_WINDOW", on_close)
         win.columnconfigure(0, weight=1)
 
     def _show_advanced_settings(self):
         win = tk.Toplevel(self.root)
-        win.title("進階設定")
+        win.title(t("gui.dlg.adv.title"))
         win.resizable(False, False)
         win.grab_set()
         pad = {"padx": 14, "pady": 6}
@@ -749,28 +763,31 @@ class MeetingRecorderApp:
         cap_var    = tk.IntVar(value=self.eq_gain_cap.get())
         filter_var = tk.BooleanVar(value=self.eq_filter_silence.get())
 
+        # ---- 語言（最上方一列）----
+        self._build_language_row(win)
+
         # ---- 音質 ----
-        frame_quality = ttk.LabelFrame(win, text=" 音質 ", padding=10)
-        frame_quality.grid(row=0, column=0, sticky="ew", **pad)
-        for label, val in [("128 kbps（標準，一般會議適用）", 128),
-                            ("192 kbps（較好音質）",           192),
-                            ("320 kbps（最高，後製 / Podcast）", 320)]:
+        frame_quality = ttk.LabelFrame(win, text=t("gui.dlg.adv.quality"), padding=10)
+        frame_quality.grid(row=1, column=0, sticky="ew", **pad)
+        for label, val in [(t("gui.adv.br128"), 128),
+                            (t("gui.adv.br192"),           192),
+                            (t("gui.adv.br320"), 320)]:
             ttk.Radiobutton(frame_quality, text=label,
                             variable=br_var, value=val).pack(anchor="w")
 
         # ---- 混音設定 ----
         frame_mix = ttk.LabelFrame(
-            win, text=" 混音設定（僅「系統＋麥克風」有效） ", padding=10)
-        frame_mix.grid(row=1, column=0, sticky="ew", **pad)
+            win, text=t("gui.dlg.adv.mix"), padding=10)
+        frame_mix.grid(row=2, column=0, sticky="ew", **pad)
 
         ttk.Checkbutton(
             frame_mix,
-            text="自動等化音量（讓兩軌響度接近）",
+            text=t("gui.adv.eq"),
             variable=eq_var,
         ).pack(anchor="w")
         ttk.Label(
             frame_mix,
-            text="僅影響合併輸出；獨立音軌保留原始音量",
+            text=t("gui.adv.eq_hint"),
             foreground="gray", font=("", 8),
         ).pack(anchor="w", pady=(2, 8))
 
@@ -779,16 +796,16 @@ class MeetingRecorderApp:
         frame_eq_sub.pack(fill="x")
         frame_eq_sub.columnconfigure(2, weight=1)
 
-        lbl_cap = ttk.Label(frame_eq_sub, text="增益上限：")
+        lbl_cap = ttk.Label(frame_eq_sub, text=t("gui.adv.gain_cap"))
         lbl_cap.grid(row=0, column=0, sticky="w")
         spn_cap = ttk.Spinbox(frame_eq_sub, from_=1, to=16,
                               textvariable=cap_var, width=5)
         spn_cap.grid(row=0, column=1, sticky="w", padx=(4, 0))
-        lbl_x = ttk.Label(frame_eq_sub, text="x  (1～16)", foreground="gray")
+        lbl_x = ttk.Label(frame_eq_sub, text=t("gui.adv.gain_range"), foreground="gray")
         lbl_x.grid(row=0, column=2, sticky="w", padx=(4, 0))
         chk_filter = ttk.Checkbutton(
             frame_eq_sub,
-            text="靜音過濾：排除靜音段再計算 RMS",
+            text=t("gui.adv.filter_silence"),
             variable=filter_var,
         )
         chk_filter.grid(row=1, column=0, columnspan=3, sticky="w", pady=(8, 0))
@@ -805,23 +822,90 @@ class MeetingRecorderApp:
 
         # ---- 確認 / 取消 ----
         frame_btns = tk.Frame(win)
-        frame_btns.grid(row=2, column=0, pady=12)
+        frame_btns.grid(row=3, column=0, pady=12)
 
         def confirm():
             self.bit_rate.set(br_var.get())
             self.equalize_enabled.set(eq_var.get())
             self.eq_gain_cap.set(max(1, min(16, cap_var.get())))
             self.eq_filter_silence.set(filter_var.get())
-            win.destroy()
 
-        ttk.Button(frame_btns, text="確認", command=confirm).pack(side="left", padx=8)
-        ttk.Button(frame_btns, text="取消", command=win.destroy).pack(side="left")
+            new_lang = self._selected_lang_code()
+            lang_changed = new_lang != self._lang_saved_code
+            self.cfg["language"] = new_lang
+            save_config(self.cfg, CONFIG_PATH)
+
+            win.destroy()
+            # 只有語言真的變更才打擾使用者——改位元率不該跳重啟視窗
+            if lang_changed:
+                self._prompt_restart_for_language()
+
+        ttk.Button(frame_btns, text=t("gui.btn.confirm"), command=confirm).pack(side="left", padx=8)
+        ttk.Button(frame_btns, text=t("gui.btn.cancel"), command=win.destroy).pack(side="left")
         win.protocol("WM_DELETE_WINDOW", win.destroy)
         win.columnconfigure(0, weight=1)
 
+    # ---- 語言選擇 ----
+    def _build_language_row(self, popup):
+        """進階設定視窗最上方的語言列。
+
+        選項由 i18n.LANGUAGES 動態生成，新增語言時這裡一個字都不必改。
+        標籤固定英文 "Language:"，選項用各語言自稱——任何語言下都認得出來。
+        """
+        lang_frame = ttk.Frame(popup)
+        lang_frame.grid(row=0, column=0, sticky="w", padx=14, pady=(10, 0))
+        ttk.Label(lang_frame, text="Language:").pack(side="left", padx=(0, 8))
+
+        self._lang_choices = i18n.available_languages()
+        # ⚠ 讀 config 不讀 i18n.get_lang()：set_lang() 只在 __init__ 跑一次，
+        # 使用者選了新語言但按「稍後」不重啟時，runtime 語言還是舊的。用 runtime
+        # 值當基準的話，下次開設定按確認會把他的選擇默默寫回去。
+        saved = self.cfg.get("language", "")
+        self._lang_saved_code = saved if i18n.is_supported(saved) else i18n.DEFAULT_LANG
+        names = [name for _, name in self._lang_choices]
+        current = next((n for c, n in self._lang_choices if c == self._lang_saved_code),
+                       names[0])
+        self.settings_lang_var = tk.StringVar(value=current)
+        ttk.Combobox(lang_frame, textvariable=self.settings_lang_var,
+                     values=names, width=14, state="readonly").pack(side="left")
+
+    def _selected_lang_code(self) -> str:
+        """把下拉選單顯示的名稱換回代號。取不到就維持原設定，不亂改。"""
+        chosen = self.settings_lang_var.get()
+        for code, name in self._lang_choices:
+            if name == chosen:
+                return code
+        return self._lang_saved_code
+
+    def _prompt_restart_for_language(self):
+        """語言變更後問是否重啟。
+
+        視窗全英文：此刻介面還是舊語言、使用者要的是新語言，用任一方都尷尬，
+        英文最中立。
+        """
+        if messagebox.askyesno(
+            "Language Changed",
+            "Restart the app to apply the new language.\n\nRestart now?",
+            parent=self.root,
+        ):
+            self._restart_app()
+
+    def _restart_app(self):
+        """起一個新行程再關掉自己。
+
+        不用 os.execv：Windows 上它會就地覆寫當前行程，tkinter 還沒釋放的視窗
+        handle 可能殘留，看起來像關不掉的殭屍視窗。
+        """
+        try:
+            subprocess.Popen([sys.executable, *sys.argv], close_fds=True)
+        except OSError:
+            # 起不了新行程就什麼都不做——使用者下次自己開一樣會生效
+            return
+        self.root.destroy()
+
     def _change_folder(self):
         folder = filedialog.askdirectory(
-            title="選擇錄音檔儲存位置",
+            title=t("gui.dlg.choose_folder"),
             initialdir=self.save_folder,
             parent=self.root,
         )
@@ -843,7 +927,7 @@ class MeetingRecorderApp:
         self.btn_record.config(state="disabled")
         self.btn_pause.config(state="disabled")
         self.btn_discard.config(state="disabled")
-        self.status_label.config(text="暫停中...", foreground="gray")
+        self.status_label.config(text=t("gui.status.pausing"), foreground="gray")
         self.timer_label.config(foreground="#FF8C00")
 
         threading.Thread(target=self._wait_for_pause, daemon=True).start()
@@ -871,10 +955,10 @@ class MeetingRecorderApp:
 
         self._pa = pyaudio.PyAudio()
 
-        self.btn_record.config(text="⏹  停止並儲存", state="normal")
-        self.btn_pause.config(text="⏸  暫停", command=self._pause_recording, state="normal")
+        self.btn_record.config(text=t("gui.btn.stop_save"), state="normal")
+        self.btn_pause.config(text=t("gui.btn.pause"), command=self._pause_recording, state="normal")
         self.btn_discard.config(state="normal")
-        self.status_label.config(text="錄音中...", foreground="red")
+        self.status_label.config(text=t("gui.status.recording"), foreground="red")
         self.timer_label.config(foreground="red")
 
         self._update_timer()
@@ -894,8 +978,8 @@ class MeetingRecorderApp:
 
     def _discard_recording(self):
         confirmed = messagebox.askyesno(
-            "確認停止不儲存",
-            "確定要停止錄音並捨棄所有資料？\n此操作無法復原。",
+            t("gui.dlg.discard.title"),
+            t("gui.dlg.discard.body"),
             icon="warning",
             parent=self.root,
         )
@@ -903,10 +987,10 @@ class MeetingRecorderApp:
             return
         self.is_recording = False
         self.is_paused = False
-        self.btn_record.config(state="disabled", text="停止中...")
+        self.btn_record.config(state="disabled", text=t("gui.status.stopping"))
         self.btn_pause.config(state="disabled")
         self.btn_discard.config(state="disabled")
-        self.status_label.config(text="停止中...", foreground="gray")
+        self.status_label.config(text=t("gui.status.stopping"), foreground="gray")
         self.timer_label.config(foreground="gray")
         self.filename_entry.config(state="normal")
         threading.Thread(target=self._cleanup_after_discard, daemon=True).start()
@@ -942,18 +1026,17 @@ class MeetingRecorderApp:
         self._save_mode = mode  # 供背景執行緒在錄音途中判斷模式（stop 前 _save_mode 才鎖定完整快照）
 
         # ---- 任務開始：一行，關鍵設定塞在同一行 ----
-        _write_log_header(
-            f"錄音 模式:{mode} | 輸出:{self.output_mode.get()} | {self.bit_rate.get()}kbps"
-        )
+        _write_log_header(LOG_TEXT["record_start"].format(
+            mode=mode, output=self.output_mode.get(), bitrate=self.bit_rate.get()))
 
         # 共用一個 PyAudio 實例，避免兩個執行緒各自 Pa_Initialize() 造成 C 層 assert crash
         self._pa = pyaudio.PyAudio()
 
-        self.btn_record.config(text="⏹  停止並儲存")
-        self.btn_pause.config(text="⏸  暫停", command=self._pause_recording, state="normal")
+        self.btn_record.config(text=t("gui.btn.stop_save"))
+        self.btn_pause.config(text=t("gui.btn.pause"), command=self._pause_recording, state="normal")
         self.btn_discard.config(state="normal")
         self._secondary_row.pack(pady=(8, 0))
-        self.status_label.config(text="錄音中...", foreground="red")
+        self.status_label.config(text=t("gui.status.recording"), foreground="red")
         self.timer_label.config(foreground="red")
         self.filename_entry.config(state="disabled")
         self._set_mode_radios_state("disabled")  # 錄音中不允許切換模式
@@ -996,13 +1079,16 @@ class MeetingRecorderApp:
         self._save_filter_silence = self.eq_filter_silence.get()
         self._save_bit_rate       = self.bit_rate.get()
 
-        self.btn_record.config(state="disabled", text="儲存中...")
-        self.status_label.config(text="轉換為 MP3 中...", foreground="gray")
+        self.btn_record.config(state="disabled", text=t("gui.btn.saving"))
+        self.status_label.config(text=t("gui.status.encoding"), foreground="gray")
         self.timer_label.config(foreground="gray")
         self.filename_entry.config(state="normal")
 
-        t = threading.Thread(target=self._save_after_stop, daemon=True)
-        t.start()
+        # ⚠ 不可命名為 t：模組層級的 t 是 i18n 的查表函式，函式內任一處指派
+        # 同名就會讓整個函式的 t 變成區域變數，上面那幾行 t("gui.btn.saving")
+        # 會直接 UnboundLocalError。tests/test_i18n.py 有一條專門擋這件事。
+        save_thread = threading.Thread(target=self._save_after_stop, daemon=True)
+        save_thread.start()
 
     # ---- 錄音執行緒：Loopback ----
     def _record_worker(self, p: pyaudio.PyAudio):
@@ -1072,7 +1158,7 @@ class MeetingRecorderApp:
                         pass
                     self._record_stream = None
                     self.msg_queue.put(("vu_system", 0.0))
-                    self.msg_queue.put(("warning", "系統音訊裝置中斷，嘗試重新連線（最多等 30 秒）..."))
+                    self.msg_queue.put(("warning", t("gui.msg.sys_device_lost")))
 
                     recovered = False
                     for _ in range(30):
@@ -1086,16 +1172,16 @@ class MeetingRecorderApp:
                             )
                             self._record_stream = stream
                             recovered = True
-                            self.msg_queue.put(("warning", "系統音訊裝置已重新連線，錄音繼續"))
+                            self.msg_queue.put(("warning", t("gui.msg.sys_device_back")))
                             break
                         except Exception:
                             continue
 
                     if not recovered:
                         if self.is_recording:
-                            _write_log("系統音訊裝置中斷 -> 30秒逾時未恢復 | 重試 30/30", "ERROR")
+                            _write_log(LOG_TEXT["sys_device_timeout"], "ERROR")
                             self.msg_queue.put(("device_failed",
-                                "系統音訊裝置無法恢復（逾時 30 秒），自動儲存已錄部分。"))
+                                t("gui.msg.sys_device_failed")))
                         break
 
             try:
@@ -1106,7 +1192,7 @@ class MeetingRecorderApp:
             self._record_stream = None
 
         except Exception as e:
-            _write_log(f"錄音執行緒(system) -> {type(e).__name__}", "ERROR")
+            _write_log(LOG_TEXT["thread_error_sys"].format(exc=type(e).__name__), "ERROR")
             self.msg_queue.put(("error", str(e)))
 
     # ---- MME 裝置查找 ----
@@ -1156,8 +1242,7 @@ class MeetingRecorderApp:
 
         # 找不到對應 MME 裝置，fallback 到 MME 預設輸入並警告使用者
         self.msg_queue.put(("warning",
-            f"找不到麥克風「{wasapi_name}」對應的 MME 裝置，"
-            f"改用 MME 預設輸入。實際錄音裝置可能與所選不符，請至裝置設定確認。"))
+            t("gui.msg.mme_not_found", name=wasapi_name)))
         default_idx = mme_info.get("defaultInputDevice", -1)
         return default_idx if default_idx >= 0 else None
 
@@ -1249,7 +1334,7 @@ class MeetingRecorderApp:
                     self._mic_stream = None
                     self.msg_queue.put(("vu_mic", 0.0))
                     self.msg_queue.put(("mic_offline", True))
-                    self.msg_queue.put(("warning", "麥克風裝置中斷，嘗試重新連線（最多等 30 秒）..."))
+                    self.msg_queue.put(("warning", t("gui.msg.mic_device_lost")))
 
                     recovered = False
                     for _ in range(30):
@@ -1269,7 +1354,7 @@ class MeetingRecorderApp:
                             self._mic_stream = stream
                             recovered = True
                             self.msg_queue.put(("mic_offline", False))
-                            self.msg_queue.put(("warning", "麥克風裝置已重新連線，錄音繼續"))
+                            self.msg_queue.put(("warning", t("gui.msg.mic_device_back")))
                             break
                         except Exception:
                             continue
@@ -1277,9 +1362,9 @@ class MeetingRecorderApp:
                     if not recovered:
                         if self.is_recording:
                             level = "warning" if self._save_mode == "both" else "error"
-                            _write_log("麥克風裝置中斷 -> 30秒逾時未恢復 | 重試 30/30", "ERROR")
+                            _write_log(LOG_TEXT["mic_device_timeout"], "ERROR")
                             self.msg_queue.put((level,
-                                "麥克風裝置無法恢復（逾時 30 秒），麥克風錄音已停止"))
+                                t("gui.msg.mic_device_failed")))
                         break
 
             try:
@@ -1293,8 +1378,8 @@ class MeetingRecorderApp:
             # Mode "both"：麥克風失敗不中止程式，但通知使用者
             # Mode "mic"：視為致命錯誤
             level = "warning" if self._save_mode == "both" else "error"
-            _write_log(f"錄音執行緒(mic) -> {type(e).__name__}", "ERROR")
-            self.msg_queue.put((level, f"麥克風錯誤：{e}"))
+            _write_log(LOG_TEXT["thread_error_mic"].format(exc=type(e).__name__), "ERROR")
+            self.msg_queue.put((level, t("gui.msg.mic_error", err=e)))
 
     # ---- 混音 ----
     def _mix_pcm(self, sys_data: bytes, sys_ch: int,
@@ -1469,7 +1554,7 @@ class MeetingRecorderApp:
             except Exception:
                 pass
         else:
-            self.msg_queue.put(("warning", "錄音執行緒未正常結束，PyAudio 資源暫時保留（重啟程式可釋放）"))
+            self.msg_queue.put(("warning", t("gui.msg.threads_stuck")))
 
         try:
             mode = self._save_mode  # 已在主執行緒鎖定，不從 tkinter StringVar 讀取
@@ -1481,7 +1566,7 @@ class MeetingRecorderApp:
 
             if mode == "system":
                 if not self.record_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何音訊"))
+                    self.msg_queue.put(("error", t("gui.msg.no_audio")))
                     return
                 pcm_data    = b"".join(self.record_frames)
                 channels    = self.record_channels
@@ -1489,7 +1574,7 @@ class MeetingRecorderApp:
 
             elif mode == "mic":
                 if not self.mic_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何音訊（麥克風）"))
+                    self.msg_queue.put(("error", t("gui.msg.no_audio_mic")))
                     return
                 pcm_data    = b"".join(self.mic_frames)
                 channels    = self.record_mic_channels
@@ -1497,18 +1582,18 @@ class MeetingRecorderApp:
 
             else:  # "both"
                 if not self.record_frames:
-                    self.msg_queue.put(("error", "沒有錄到任何系統音訊"))
+                    self.msg_queue.put(("error", t("gui.msg.no_audio_system")))
                     return
 
                 if not self.mic_frames:
                     # 麥克風無資料，退回純系統音訊
-                    self.msg_queue.put(("warning", "麥克風無資料，改以「電腦聲音」模式儲存"))
+                    self.msg_queue.put(("warning", t("gui.msg.mic_no_data")))
                     mp3_data = self._encode_to_mp3(
                         b"".join(self.record_frames),
                         self.record_channels, self.record_sample_rate,
                         bit_rate=self._save_bit_rate,
-                        progress_cb=self._make_progress_cb("音訊", 1, 1))
-                    self.msg_queue.put(("progress_done", "✓ 編碼完成"))
+                        progress_cb=self._make_progress_cb(t("gui.enc.audio"), 1, 1))
+                    self.msg_queue.put(("progress_done", t("gui.log.enc_done")))
                     filepath = self._save_file(mp3_data, base_name)
                     self.msg_queue.put(("saved", [filepath]))
                     return
@@ -1530,25 +1615,26 @@ class MeetingRecorderApp:
                         self.record_channels, self.record_sample_rate,
                         bit_rate=self._save_bit_rate,
                         progress_cb=self._make_progress_cb("system", enc_idx, total_enc))
-                    self.msg_queue.put(("progress_done", "✓ system 編碼完成"))
+                    self.msg_queue.put(("progress_done", t("gui.log.enc_done_system")))
                     enc_idx += 1
                     mic_mp3 = self._encode_to_mp3(
                         b"".join(mic_frames_snap),
                         self.record_mic_channels, self.record_mic_rate,
                         bit_rate=self._save_bit_rate,
                         progress_cb=self._make_progress_cb("mic", enc_idx, total_enc))
-                    self.msg_queue.put(("progress_done", "✓ mic 編碼完成"))
+                    self.msg_queue.put(("progress_done", t("gui.log.enc_done_mic")))
                     saved_paths.append(self._save_file(sys_mp3, base_name, "_system"))
                     saved_paths.append(self._save_file(mic_mp3, base_name, "_mic"))
 
                 # ---- 合併音軌 ----
                 if output_mode in ("merge", "both"):
                     if self.record_mic_rate != self.record_sample_rate:
-                        self.msg_queue.put(("warning",
-                            f"麥克風取樣率（{self.record_mic_rate} Hz）與系統音訊"
-                            f"（{self.record_sample_rate} Hz）不一致，麥克風聲音可能略有偏差"))
+                        self.msg_queue.put(("warning", t(
+                            "gui.msg.rate_mismatch",
+                            mic_rate=self.record_mic_rate,
+                            sys_rate=self.record_sample_rate)))
 
-                    self.msg_queue.put(("status", "混音中..."))
+                    self.msg_queue.put(("status", t("gui.status.mixing")))
                     sys_pcm = b"".join(sys_frames_snap)
                     mic_pcm = b"".join(mic_frames_snap)
 
@@ -1568,25 +1654,25 @@ class MeetingRecorderApp:
                     merged_mp3 = self._encode_to_mp3(
                         mixed_pcm, self.record_channels, self.record_sample_rate,
                         bit_rate=self._save_bit_rate,
-                        progress_cb=self._make_progress_cb("合併音訊", enc_idx, total_enc))
-                    self.msg_queue.put(("progress_done", "✓ 合併音訊編碼完成"))
+                        progress_cb=self._make_progress_cb(t("gui.enc.merged"), enc_idx, total_enc))
+                    self.msg_queue.put(("progress_done", t("gui.log.enc_done_merged")))
                     saved_paths.append(self._save_file(merged_mp3, base_name))
 
                 if not saved_paths:
-                    self.msg_queue.put(("error", f"未知的輸出模式：{output_mode}"))
+                    self.msg_queue.put(("error", t("gui.msg.unknown_output_mode", mode=output_mode)))
                     return
                 self.msg_queue.put(("saved", saved_paths))
                 return
 
             mp3_data = self._encode_to_mp3(pcm_data, channels, sample_rate,
                                            bit_rate=self._save_bit_rate,
-                                           progress_cb=self._make_progress_cb("音訊", 1, 1))
-            self.msg_queue.put(("progress_done", "✓ 編碼完成"))
+                                           progress_cb=self._make_progress_cb(t("gui.enc.audio"), 1, 1))
+            self.msg_queue.put(("progress_done", t("gui.log.enc_done")))
             filepath = self._save_file(mp3_data, base_name)
             self.msg_queue.put(("saved", [filepath]))
 
         except Exception as e:
-            _write_log(f"儲存處理 -> {type(e).__name__}", "ERROR")
+            _write_log(LOG_TEXT["save_error"].format(exc=type(e).__name__), "ERROR")
             self.msg_queue.put(("error", str(e)))
 
     # ---- 執行緒安全 UI 更新 ----
@@ -1618,8 +1704,9 @@ class MeetingRecorderApp:
     def _make_progress_cb(self, label: str, file_idx: int, total: int):
         """回傳一個 callback，每次呼叫時把進度推進 msg_queue。"""
         def cb(pct: int):
-            self.msg_queue.put(("progress",
-                f"⏳ 編碼 {label} ({file_idx}/{total}) {pct}%"))
+            self.msg_queue.put(("progress", t(
+                "gui.log.encoding", label=label, idx=file_idx,
+                total=total, pct=pct)))
         return cb
 
     def _reset_ui_after_stop(self):
@@ -1627,8 +1714,8 @@ class MeetingRecorderApp:
         self._is_saving = False
         self.is_paused = False
         self._elapsed_before_pause = 0.0
-        self.btn_record.config(state="normal", text="⏺  開始錄音")
-        self.btn_pause.config(text="⏸  暫停", command=self._pause_recording, state="normal")
+        self.btn_record.config(state="normal", text=t("gui.btn.record_start"))
+        self.btn_pause.config(text=t("gui.btn.pause"), command=self._pause_recording, state="normal")
         self.btn_discard.config(state="normal")
         self._secondary_row.pack_forget()
         self.timer_label.config(text="00:00", foreground="gray")
@@ -1653,8 +1740,8 @@ class MeetingRecorderApp:
         """
         if self._is_saving:
             proceed = messagebox.askyesno(
-                "檔案處理中",
-                "檔案處理中，若現在關閉將遺失處理進度，確定要關閉嗎？"
+                t("gui.dlg.closing.title"),
+                t("gui.dlg.closing.body")
             )
             if not proceed:
                 return
@@ -1714,19 +1801,22 @@ class MeetingRecorderApp:
                     for fp in data:
                         self._log(f"✓  {os.path.basename(fp)}")
                     self.status_label.config(
-                        text=f"已儲存：{os.path.basename(data[-1])}", foreground="green")
+                        text=t("gui.status.saved",
+                               name=os.path.basename(data[-1])), foreground="green")
                     # ---- 任務結果：成功 + 耗時 ----
                     elapsed = int(time.time() - self.start_time)
-                    _write_log(f"成功，耗時 {elapsed // 60}分{elapsed % 60}秒 | 存檔 {len(data)} 個", "OK")
+                    _write_log(LOG_TEXT["result_ok"].format(
+                        minutes=elapsed // 60, seconds=elapsed % 60, count=len(data)), "OK")
                     self._reset_ui_after_stop()
 
                 elif msg_type == "error":
                     self._log(f"[ERROR] {data}")
                     # ---- 任務結果：失敗 + 耗時 ----
                     elapsed = int(time.time() - self.start_time)
-                    _write_log(f"失敗，耗時 {elapsed // 60}分{elapsed % 60}秒", "FAIL")
+                    _write_log(LOG_TEXT["result_fail"].format(
+                        minutes=elapsed // 60, seconds=elapsed % 60), "FAIL")
                     self._reset_ui_after_stop()
-                    self.status_label.config(text="發生錯誤，請查看記錄", foreground="red")
+                    self.status_label.config(text=t("gui.status.error"), foreground="red")
                     self.is_recording = False
 
                 elif msg_type == "warning":
@@ -1750,15 +1840,15 @@ class MeetingRecorderApp:
                     self._mic_clip_until = time.time() + _CLIP_WARNING_HOLD_SECS
 
                 elif msg_type == "mic_offline":
-                    self.mic_offline_label.config(text="⚠ 麥克風斷線" if data else "")
+                    self.mic_offline_label.config(text=t("gui.lbl.mic_offline") if data else "")
 
                 elif msg_type == "paused":
                     self.mic_offline_label.config(text="")
                     self.btn_record.config(state="normal")
-                    self.btn_pause.config(text="▶  繼續錄音",
+                    self.btn_pause.config(text=t("gui.btn.resume"),
                                           command=self._resume_recording, state="normal")
                     self.btn_discard.config(state="normal")
-                    self.status_label.config(text="已暫停", foreground="#FF8C00")
+                    self.status_label.config(text=t("gui.status.paused"), foreground="#FF8C00")
 
                 elif msg_type == "device_failed":
                     self._log(f"[WARNING] {data}")
@@ -1766,12 +1856,13 @@ class MeetingRecorderApp:
                         self._stop_recording()
 
                 elif msg_type == "discarded":
-                    self._log("✗  錄音已捨棄（未儲存）")
+                    self._log(t("gui.log.discarded"))
                     # ---- 任務結果：使用者主動捨棄 + 耗時 ----
                     elapsed = int(time.time() - self.start_time)
-                    _write_log(f"使用者捨棄，耗時 {elapsed // 60}分{elapsed % 60}秒", "OK")
+                    _write_log(LOG_TEXT["result_discarded"].format(
+                        minutes=elapsed // 60, seconds=elapsed % 60), "OK")
                     self._reset_ui_after_stop()
-                    self.status_label.config(text="錄音已捨棄", foreground="gray")
+                    self.status_label.config(text=t("gui.status.discarded"), foreground="gray")
 
                 elif msg_type == "status":
                     self.status_label.config(text=data, foreground="gray")
@@ -1793,10 +1884,60 @@ class MeetingRecorderApp:
         self.root.after(100, self._poll_queue)
 
 
+# ---- 首次啟動選語言 ----
+def _pick_language_on_first_run(root: tk.Tk) -> None:
+    """首次啟動時問一次語言，選完寫進 config.json，之後不再出現。
+
+    視窗刻意**不翻譯**：這時候還不知道使用者要哪個語言，用任一種當說明都
+    在賭。只有一個英文抬頭，其餘全是各語言的自稱，看得懂哪個就點哪個。
+
+    直接關掉視窗＝接受第一個選項並**照樣存檔**——需求是「選完就記住不要再
+    跳」，關掉還一直跳才是煩人。選錯了在進階設定隨時能改。
+    """
+    cfg = load_config(CONFIG_PATH)
+    if i18n.is_supported(cfg.get("language", "")):
+        return                      # 選過了，直接進主畫面
+
+    choices = i18n.available_languages()
+    chosen = {"code": choices[0][0]}
+
+    dlg = tk.Toplevel(root)
+    dlg.title("Language")
+    dlg.resizable(False, False)
+    dlg.attributes("-topmost", True)
+
+    ttk.Label(dlg, text="Select your language",
+              font=("", 12, "bold")).pack(padx=28, pady=(20, 4))
+    ttk.Label(dlg, text="You can change this later in Advanced Settings.",
+              foreground="#555555").pack(padx=28, pady=(0, 14))
+
+    def _choose(code: str) -> None:
+        chosen["code"] = code
+        dlg.destroy()
+
+    for code, name in choices:
+        ttk.Button(dlg, text=name, width=20,
+                   command=lambda c=code: _choose(c)).pack(padx=28, pady=3)
+    ttk.Frame(dlg, height=10).pack()
+
+    dlg.update_idletasks()
+    x = root.winfo_rootx() + (root.winfo_width() - dlg.winfo_width()) // 2
+    y = root.winfo_rooty() + (root.winfo_height() - dlg.winfo_height()) // 3
+    dlg.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+
+    dlg.grab_set()
+    dlg.protocol("WM_DELETE_WINDOW", dlg.destroy)   # 關掉＝用預設值，照樣存
+    root.wait_window(dlg)
+
+    cfg["language"] = chosen["code"]
+    save_config(cfg, CONFIG_PATH)
+
+
 # ---- 入口 ----
 def main():
     show_cth_banner()
     root = tk.Tk()
+    _pick_language_on_first_run(root)
     MeetingRecorderApp(root)
     root.mainloop()
 
