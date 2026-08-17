@@ -43,3 +43,28 @@ Discord 在 WASAPI 層對麥克風裝置啟用 Windows 音訊增強（AGC 自動
 **禁止**  
 - 不可把麥克風 stream 改回用 `self.selected_input_idx`（WASAPI index）直接開啟  
 - `_find_mme_mic_device()` 的 fallback 鏈（找不到對應 MME 裝置 → MME 預設 → 原 WASAPI index）必須保留，否則找不到 MME 時會 crash
+
+---
+
+## Pitfall 3：區域變數 `t` 遮蔽翻譯函式 → `_stop_recording` 直接 UnboundLocalError
+
+**問題**
+導入多語言後，按「停止並儲存」直接拋 `UnboundLocalError`，錄音檔存不出來。
+
+**原因**
+`from i18n import t` 是模組層級的匯入，但 `_stop_recording` 裡有一個叫 `t` 的區域指派。
+Python 只要在函式內有 `t = ...`，整個函式的 `t` 就被當成區域變數，
+**指派之前的每一次 `t(...)` 呼叫都會 UnboundLocalError**——即使模組層級明明有 `t`。
+
+**解法**
+把遮蔽的名字全部改掉，並加 `test_nothing_shadows_the_translation_function`
+（用 AST 掃函式定義、迴圈變數、指派、**函式參數**四種形狀）永久釘住。
+
+**禁止**
+- 不可用 `t` 當任何區域變數、迴圈變數、函式參數的名字
+- 不可只用 `grep "\bt\b"` 檢查，雜訊太多會漏；一定要用 AST
+- 導入新的翻譯字串前，先跑那條測試
+
+**備註**
+這個坑在 10 個專案的多語言遷移裡有 6 個中招，Snap GIF Creator 一個就 15 處。
+跨專案的完整說明見 `C:\Users\CTH\Documents\Code\_i18n_migration\i18n_lessons.md`。
