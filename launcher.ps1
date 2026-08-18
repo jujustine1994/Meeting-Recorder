@@ -54,65 +54,17 @@ if ($isArm64) {
 }
 
 # ======================================
-# [1/3] 檢查 Python
+# [1/2] 檢查 uv
+#
+# ⚠ 只檢查 uv，不檢查系統 Python——uv 自己就會下載 Python（地雷十二）。
+#   本程式的錄音套件（pyaudiowpatch）需要 x64 版 Python；uv 依自身執行架構挑
+#   對應的 python-build-standalone，CTH 沒有 ARM64 機器可實測，若日後在 ARM64
+#   上遇到 pyaudiowpatch 安裝失敗，回來確認是否需要改用 `--python-platform`。
 # ======================================
-Write-Host "[1/3] 檢查 Python 環境..." -ForegroundColor Cyan
-if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    Write-Host "[WARNING] 未偵測到 Python，本程式需要 Python 才能執行。" -ForegroundColor Yellow
-
-    if ($isArm64) {
-        Write-Host ""
-        Write-Host "  [!] 您的電腦是 ARM64 架構。" -ForegroundColor Yellow
-        Write-Host "      本程式的錄音套件（pyaudiowpatch）需要 x64 版本的 Python。" -ForegroundColor Yellow
-        Write-Host "      安裝時請確認選擇的是 Windows x64 版本，而非 ARM64 版本。" -ForegroundColor Yellow
-        Write-Host ""
-    }
-
-    $ans = Read-Host "是否要立即安裝 Python？[Y/n] - 直接按 Enter 代表同意"
-    if ($ans -eq "" -or $ans -ieq "Y") {
-        if (Get-Command winget -ErrorAction SilentlyContinue) {
-            Write-Host "[INFO] 透過 winget 安裝 Python（x64），請稍候..." -ForegroundColor Gray
-            # 指定 x64 架構，確保 ARM64 電腦也安裝 x64 版（pyaudiowpatch 相容性需求）
-            winget install --id Python.Python.3 -e --silent --accept-source-agreements --accept-package-agreements --architecture x64 --override "/quiet PrependPath=1 Include_pip=1"
-        } else {
-            Write-Log "找不到 winget，無法自動安裝 Python" "ERROR"
-            Write-Host "[ERROR] 找不到 winget，請手動至 https://www.python.org/ 下載 Windows x64 版安裝後重新執行。" -ForegroundColor Red
-            Read-Host "按 Enter 關閉"; exit 1
-        }
-        $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("PATH", "User")
-        if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-            Write-Host "[INFO] 安裝完成，請關閉視窗後重新點兩下啟動檔。" -ForegroundColor Yellow
-            Read-Host "按 Enter 關閉"; exit 0
-        }
-        $pyVer = python --version 2>&1
-        Write-Host "[OK] Python 安裝完成。" -ForegroundColor Green
-    } else {
-        Write-Host "已取消。" -ForegroundColor Gray; Read-Host "按 Enter 關閉"; exit 1
-    }
-} else {
-    $pyVer = python --version 2>&1
-    Write-Host "[OK] $pyVer 已安裝。" -ForegroundColor Green
-
-    # ARM64 電腦但已安裝 ARM64 Python：提醒可能造成套件安裝失敗
-    if ($isArm64) {
-        $pyArch = python -c "import platform; print(platform.machine())" 2>&1
-        if ($pyArch -notmatch "AMD64") {
-            Write-Host ""
-            Write-Host "  [!] 偵測到您安裝的是 ARM64 版 Python（$pyArch）。" -ForegroundColor Yellow
-            Write-Host "      若後續套件安裝失敗，請改裝 x64 版 Python：" -ForegroundColor Yellow
-            Write-Host "      到「設定 -> 應用程式」移除目前的 Python，" -ForegroundColor Yellow
-            Write-Host "      再重新點兩下啟動檔，會自動安裝正確版本。" -ForegroundColor Yellow
-            Write-Host ""
-        }
-    }
-}
-
-# ======================================
-# [2/3] 檢查 uv
-# ======================================
-Write-Host "[2/3] 檢查 uv 套件管理工具..." -ForegroundColor Cyan
+Write-Host "[1/2] 檢查 uv 套件管理工具..." -ForegroundColor Cyan
 if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
     Write-Host "[WARNING] 找不到 uv，正在安裝..." -ForegroundColor Yellow
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 } catch {}
     Invoke-RestMethod https://astral.sh/uv/install.ps1 | Invoke-Expression
     $env:PATH = [System.Environment]::GetEnvironmentVariable("PATH", "User") + ";" + $env:PATH
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
@@ -128,9 +80,9 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
 }
 
 # ======================================
-# [3/3] 檢查虛擬環境
+# [2/2] 檢查虛擬環境
 # ======================================
-Write-Host "[3/3] 檢查虛擬環境..." -ForegroundColor Cyan
+Write-Host "[2/2] 檢查虛擬環境..." -ForegroundColor Cyan
 if (-not (Test-Path "venv")) {
     Write-Host ""
     Write-Host "  ============================================" -ForegroundColor Cyan
@@ -155,8 +107,13 @@ if (-not (Test-Path "venv")) {
     Write-Host ""
     $ans = Read-Host "[WARNING] 找不到虛擬環境，現在建立並安裝套件？[Y/n] - 直接按 Enter 代表同意"
     if ($ans -eq "" -or $ans -ieq "Y") {
-        Write-Host "[INFO] 建立虛擬環境中..." -ForegroundColor Gray
-        uv venv venv
+        Write-Host "[INFO] 建立虛擬環境中（電腦若沒有 Python 會自動下載，約 20MB）..." -ForegroundColor Gray
+        uv venv venv --python 3.13
+        if ($LASTEXITCODE -ne 0) {
+            Write-Log "建立虛擬環境失敗（uv venv 回傳 $LASTEXITCODE）" "ERROR"
+            Write-Host "[ERROR] 建立虛擬環境失敗，多半是下載 Python 時連不上網路。請確認網路連線後重新執行。" -ForegroundColor Red
+            Read-Host "按 Enter 關閉"; exit 1
+        }
         Write-Host "[INFO] 安裝套件中（首次需要幾分鐘）..." -ForegroundColor Gray
         uv pip install -r requirements.txt --python venv\Scripts\python.exe
         if ($LASTEXITCODE -ne 0) {
@@ -183,6 +140,7 @@ if (-not (Test-Path "venv")) {
 
 . ".\venv\Scripts\Activate.ps1"
 
+$pyVer = (& ".\venv\Scripts\python.exe" --version 2>&1 | Out-String).Trim()
 Write-Log "環境就緒 | $pyVer | $uvVer"
 
 Write-Host ""

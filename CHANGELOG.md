@@ -39,6 +39,12 @@
 
 ## 更新記錄
 
+### 2026-08-17 — launcher.ps1 拿掉失效的 winget Python 安裝步驟
+`winget install --id Python.Python.3`（不帶次版號）已被上游下架，靜默失效。改成
+只檢查 uv，`uv venv venv --python 3.13` 讓 uv 自己下載 Python。步驟從 [1/3]~[3/3]
+改成 [1/2]~[2/2]。pyaudiowpatch 需要 x64 Python 的 ARM64 相容性提醒予以保留，
+但 CTH 沒有 ARM64 機器，uv 版是否仍相容未實測，詳見程式碼內註解。
+
 ### 2026-08-15 — 多語言（i18n）
 - 新增：介面支援繁體中文 / 简体中文 / English / 日本語，共 108 條字串 × 4 語
 - 新增：`i18n.py`（查表核心 `t()`）、`config.py`（`config.json` 讀寫）、
